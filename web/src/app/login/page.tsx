@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth/config";
+import { needsBootstrap } from "@/lib/services/bootstrap";
 import { LoginForm } from "./login-form";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage() {
   const session = await auth();
   if (session?.user) redirect("/app");
+  const bootstrap = await needsBootstrap();
 
   return (
     <main className="relative flex min-h-screen flex-col justify-center px-4">
@@ -34,7 +36,7 @@ export default async function LoginPage() {
         </p>
 
         <Suspense fallback={<div className="mt-8 h-64 bg-white/80" />}>
-          <LoginForm />
+          <LoginForm needsBootstrap={bootstrap} />
         </Suspense>
       </div>
     </main>

@@ -33,7 +33,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### Demo users
+### Demo users (local seed)
 
 Password: `willows-demo` (or `DEMO_PASSWORD`)
 
@@ -46,6 +46,8 @@ Password: `willows-demo` (or `DEMO_PASSWORD`)
 | auditor@willows.local | Auditor |
 
 Seed data only marks Willows name/location as known. Bank balances, dues, building conditions, loans, and legal figures are explicitly **unknown** / **missing** until verified records are supplied.
+
+On an empty Netlify Database (no seed), `/login` shows **Create first admin** once migrations have been applied by deploy.
 
 ## Scripts
 
