@@ -8,6 +8,13 @@
       "when": 1793113755708,
       "tag": "0000_steady_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793209311320,
+      "tag": "0001_daily_scarecrow",
+      "breakpoints": true
     }
   ]
 }

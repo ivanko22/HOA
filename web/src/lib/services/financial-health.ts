@@ -15,6 +15,9 @@ import {
   type TenantContext,
 } from "@/lib/domain/permissions";
 
+/** Fact query boundary for future KPI wiring — see fact-metrics.ts */
+export { getFactsForMetric } from "./fact-metrics";
+
 export type KpiCard = {
   id: string;
   label: string;

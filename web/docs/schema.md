@@ -170,6 +170,32 @@ Polymorphic relations.
 
 Extractions are never authoritative until verified and posted through normal accounting paths.
 
+### documents (extended)
+Additional columns: `processing_status` (`processing | needs_review | source_only | partially_verified | verified`), `period_start`, `period_end`, `original_filename`. Document processing status is separate from fact verification status.
+
+### facts
+Source-of-truth claims derived from documents (manual now; AI staging later via extractions).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid PK | |
+| organization_id / community_id / document_id | uuid | tenant + source |
+| fact_type | text | e.g. monthly_dues_collected |
+| label | text | |
+| value | text nullable | non-numeric facts |
+| numeric_value | numeric nullable | **null ≠ 0** |
+| unit | text nullable | USD, USD/month, … |
+| period_start / period_end / as_of_date | date nullable | |
+| source_page / source_reference / source_excerpt | text | provenance |
+| verification_status | verification_status | |
+| confidence | numeric nullable | |
+| notes | text | |
+| provenance_id | uuid nullable | |
+| created_by / verified_by / verified_at | | |
+| created_at / updated_at | timestamptz | |
+
+Multiple facts for the same metric/period are retained; conflicts are flagged rather than overwritten.
+
 ## Accounting
 
 ### chart_of_accounts / accounts

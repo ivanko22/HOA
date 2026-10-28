@@ -58,6 +58,39 @@ export const documentCategories = [
 ] as const;
 
 export type DocumentCategory = (typeof documentCategories)[number];
+export const documentCategorySchema = z.enum(documentCategories);
+
+export const documentProcessingStatuses = [
+  "processing",
+  "needs_review",
+  "source_only",
+  "partially_verified",
+  "verified",
+] as const;
+
+export type DocumentProcessingStatus =
+  (typeof documentProcessingStatuses)[number];
+export const documentProcessingStatusSchema = z.enum(
+  documentProcessingStatuses,
+);
+
+export const factTypes = [
+  "monthly_dues_collected",
+  "operating_expenses",
+  "accounts_receivable",
+  "accounts_payable",
+  "cash_balance",
+  "reserve_balance",
+  "special_assessment_collected",
+  "insurance_premium",
+  "legal_expense",
+  "roof_condition",
+  "stairwell_condition",
+  "other",
+] as const;
+
+export type FactType = (typeof factTypes)[number];
+export const factTypeSchema = z.enum(factTypes);
 
 export const accountTypes = [
   "asset",

@@ -19,6 +19,9 @@ const badgeVariants = cva(
         needs_reconciliation:
           "bg-orange-50 text-orange-950 border-orange-200",
         pending: "bg-amber-50 text-amber-950 border-amber-200",
+        processing: "bg-slate-100 text-slate-800 border-slate-200",
+        source_only: "bg-slate-50 text-slate-700 border-slate-200",
+        partially_verified: "bg-sky-50 text-sky-950 border-sky-200",
       },
     },
     defaultVariants: {

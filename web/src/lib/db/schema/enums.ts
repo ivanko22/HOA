@@ -32,6 +32,17 @@ export const documentCategoryEnum = pgEnum("document_category", [
   "other",
 ]);
 
+export const documentProcessingStatusEnum = pgEnum(
+  "document_processing_status",
+  [
+    "processing",
+    "needs_review",
+    "source_only",
+    "partially_verified",
+    "verified",
+  ],
+);
+
 export const accountTypeEnum = pgEnum("account_type", [
   "asset",
   "liability",

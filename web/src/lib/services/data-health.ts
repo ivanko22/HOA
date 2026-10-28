@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
-import { dataHealthChecks } from "@/lib/db/schema";
+import { dataHealthChecks, documents } from "@/lib/db/schema";
 import type { DataHealthStatus } from "@/lib/domain/enums";
 import {
   assertCan,
@@ -25,6 +25,14 @@ export type DataHealthView = {
     status: DataHealthStatus;
     notes: string | null;
   }[];
+  meetingMinutesByYear: {
+    id: string;
+    year: number | null;
+    label: string;
+    status: DataHealthStatus;
+    notes: string | null;
+    documentCount: number;
+  }[];
 };
 
 const positive: DataHealthStatus[] = ["available"];
@@ -41,6 +49,17 @@ export async function getDataHealth(
       and(
         eq(dataHealthChecks.organizationId, ctx.organizationId),
         eq(dataHealthChecks.communityId, ctx.communityId),
+      ),
+    );
+
+  const communityDocs = await db
+    .select()
+    .from(documents)
+    .where(
+      and(
+        eq(documents.organizationId, ctx.organizationId),
+        eq(documents.communityId, ctx.communityId),
+        eq(documents.category, "meeting_minutes"),
       ),
     );
 
@@ -75,5 +94,34 @@ export async function getDataHealth(
       notes: c.notes,
     }));
 
-  return { score, scoredCount, availableCount, checks, gaps };
+  const meetingMinutesByYear = checks
+    .filter((c) => c.category === "meeting_minutes")
+    .map((c) => {
+      const documentCount = communityDocs.filter((d) => {
+        const y =
+          d.documentDate?.slice(0, 4) ??
+          d.periodStart?.slice(0, 4) ??
+          null;
+        return c.year != null && y === String(c.year);
+      }).length;
+      return {
+        ...c,
+        documentCount,
+        notes:
+          c.status === "missing"
+            ? c.notes ??
+              "Not currently available. This does not imply records never existed."
+            : c.notes,
+      };
+    })
+    .sort((a, b) => (a.year ?? 0) - (b.year ?? 0));
+
+  return {
+    score,
+    scoredCount,
+    availableCount,
+    checks,
+    gaps,
+    meetingMinutesByYear,
+  };
 }

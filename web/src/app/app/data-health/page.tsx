@@ -1,6 +1,7 @@
 import { requireTenantContext } from "@/lib/auth/config";
 import { getDataHealth } from "@/lib/services/data-health";
 import { Badge } from "@/components/ui/badge";
+import { DataCompletenessIndicator } from "@/components/data-health/data-completeness-indicator";
 import type { DataHealthStatus } from "@/lib/domain/enums";
 
 function healthVariant(status: DataHealthStatus) {
@@ -61,6 +62,27 @@ export default async function DataHealthPage() {
           )}
         </div>
       </section>
+
+      <DataCompletenessIndicator
+        title="Meeting Minutes completeness"
+        items={health.meetingMinutesByYear.map((m) => ({
+          id: m.id,
+          year: m.year,
+          label:
+            m.status === "available"
+              ? "records available"
+              : m.status === "missing"
+                ? "Not currently available"
+                : m.label,
+          status: m.status,
+          notes:
+            m.status === "missing"
+              ? "Not currently available. This does not imply records never existed."
+              : m.documentCount > 0
+                ? `${m.documentCount} catalog document(s) on file.`
+                : m.notes,
+        }))}
+      />
 
       <section className="border border-[var(--border)] bg-[var(--surface)]">
         <div className="border-b border-[var(--border)] px-4 py-3">

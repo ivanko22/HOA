@@ -9,9 +9,11 @@ import {
   communities,
   dataHealthChecks,
   documents,
+  facts,
   financialPeriods,
   memberships,
   organizations,
+  provenanceRecords,
   units,
   users,
   capitalProjects,
@@ -274,44 +276,218 @@ async function main() {
     });
   }
 
-  // Documents: catalog placeholders — availability reflected in data health
+  // Known Willows document catalog — do not invent missing years/files
+  const obsoleteTitles = [
+    "2026 Board Meeting Minutes (placeholder catalog)",
+  ];
+  for (const title of obsoleteTitles) {
+    const existing = await db
+      .select()
+      .from(documents)
+      .where(eq(documents.communityId, community.id));
+    const match = existing.find((x) => x.title === title);
+    if (match) {
+      await db.delete(facts).where(eq(facts.documentId, match.id));
+      await db.delete(documents).where(eq(documents.id, match.id));
+    }
+  }
+
   const docSeeds = [
     {
       category: "meeting_minutes" as const,
-      title: "2024 Annual Meeting Minutes",
-      documentDate: "2024-03-15",
+      title: "2024 Meeting Minutes",
+      documentDate: "2024-12-31",
+      periodStart: "2024-01-01",
+      periodEnd: "2024-12-31",
+      processingStatus: "source_only" as const,
+      description:
+        "Known record in the Willows catalog. Original file bytes not supplied in this environment.",
       tags: ["minutes", "2024"],
     },
     {
       category: "meeting_minutes" as const,
-      title: "2026 Board Meeting Minutes (placeholder catalog)",
-      documentDate: "2026-01-15",
-      tags: ["minutes", "2026"],
+      title: "Board Meeting Minutes — October 1, 2026",
+      documentDate: "2026-10-01",
+      periodStart: "2026-09-01",
+      periodEnd: "2026-09-30",
+      processingStatus: "needs_review" as const,
+      description:
+        "October 1, 2026 meeting minutes. Reported financial figures captured as facts (not verified).",
+      tags: ["minutes", "2026", "oct-1"],
     },
   ];
+
+  const docsByTitle: Record<string, (typeof documents.$inferSelect)> = {};
   for (const d of docSeeds) {
     const existing = await db
       .select()
       .from(documents)
       .where(eq(documents.communityId, community.id));
-    if (existing.some((x) => x.title === d.title)) continue;
-    await db.insert(documents).values({
-      organizationId: org.id,
-      communityId: community.id,
-      category: d.category,
-      title: d.title,
-      description:
-        "Catalog entry only. File binary not supplied; treat content as unverified until uploaded.",
-      storageKey: `seed/${community.slug}/${d.title.replace(/\s+/g, "-").toLowerCase()}.pdf`,
-      mimeType: "application/pdf",
-      byteSize: 0,
-      documentDate: d.documentDate,
-      tags: d.tags,
-      uploadedBy: admin.id,
-    });
+    const found = existing.find((x) => x.title === d.title);
+    if (found) {
+      const [updated] = await db
+        .update(documents)
+        .set({
+          category: d.category,
+          description: d.description,
+          documentDate: d.documentDate,
+          periodStart: d.periodStart,
+          periodEnd: d.periodEnd,
+          processingStatus: d.processingStatus,
+          tags: d.tags,
+          updatedAt: new Date(),
+        })
+        .where(eq(documents.id, found.id))
+        .returning();
+      docsByTitle[d.title] = updated;
+      continue;
+    }
+    const [row] = await db
+      .insert(documents)
+      .values({
+        organizationId: org.id,
+        communityId: community.id,
+        category: d.category,
+        title: d.title,
+        description: d.description,
+        storageKey: `seed/${community.slug}/${d.title.replace(/\s+/g, "-").toLowerCase()}.pdf`,
+        mimeType: "application/pdf",
+        byteSize: 0,
+        documentDate: d.documentDate,
+        periodStart: d.periodStart,
+        periodEnd: d.periodEnd,
+        processingStatus: d.processingStatus,
+        tags: d.tags,
+        uploadedBy: admin.id,
+        originalFilename: null,
+      })
+      .returning();
+    docsByTitle[d.title] = row;
   }
 
-  // Data health — honest gaps
+  // Also keep legacy 2024 Annual title if already present as an alias catalog row
+  const existingDocs = await db
+    .select()
+    .from(documents)
+    .where(eq(documents.communityId, community.id));
+  const annual2024 = existingDocs.find(
+    (x) => x.title === "2024 Annual Meeting Minutes",
+  );
+  if (annual2024 && !docsByTitle["2024 Meeting Minutes"]) {
+    docsByTitle["2024 Meeting Minutes"] = annual2024;
+  }
+
+  const octDoc = docsByTitle["Board Meeting Minutes — October 1, 2026"];
+  if (octDoc) {
+    const existingFacts = await db
+      .select()
+      .from(facts)
+      .where(eq(facts.documentId, octDoc.id));
+
+    const factSeeds: {
+      factType: string;
+      label: string;
+      numericValue: string;
+      unit: string;
+      notes: string;
+      periodStart: string | null;
+      periodEnd: string | null;
+      asOfDate: string | null;
+    }[] = [
+      {
+        factType: "operating_expenses",
+        label: "September expenses",
+        numericValue: "108476.00",
+        unit: "USD",
+        notes: "From Oct 1, 2026 meeting minutes — reported, not verified.",
+        periodStart: "2026-09-01",
+        periodEnd: "2026-09-30",
+        asOfDate: "2026-10-01",
+      },
+      {
+        factType: "special_assessment_collected",
+        label: "Special assessment collected",
+        numericValue: "17973.00",
+        unit: "USD",
+        notes: "From Oct 1, 2026 meeting minutes — reported, not verified.",
+        periodStart: null,
+        periodEnd: null,
+        asOfDate: "2026-10-01",
+      },
+      {
+        factType: "monthly_dues_collected",
+        label: "Average dues collected",
+        numericValue: "41195.00",
+        unit: "USD/month",
+        notes: "From Oct 1, 2026 meeting minutes — reported, not verified.",
+        periodStart: null,
+        periodEnd: null,
+        asOfDate: "2026-10-01",
+      },
+      {
+        factType: "operating_expenses",
+        label: "Approximate base operating expenses",
+        numericValue: "35000.00",
+        unit: "USD/month",
+        notes:
+          "Approximate base operating expenses from Oct 1, 2026 minutes — reported estimate language retained via unit USD/month.",
+        periodStart: null,
+        periodEnd: null,
+        asOfDate: "2026-10-01",
+      },
+      {
+        factType: "monthly_dues_collected",
+        label: "Potential dues at full collection",
+        numericValue: "50000.00",
+        unit: "USD/month",
+        notes:
+          "Approximate potential dues at full collection — reported from Oct 1, 2026 minutes.",
+        periodStart: null,
+        periodEnd: null,
+        asOfDate: "2026-10-01",
+      },
+    ];
+
+    for (const f of factSeeds) {
+      if (existingFacts.some((x) => x.label === f.label)) continue;
+      const [prov] = await db
+        .insert(provenanceRecords)
+        .values({
+          organizationId: org.id,
+          communityId: community.id,
+          sourceDocumentId: octDoc.id,
+          sourceReference: "Board Meeting Minutes — October 1, 2026",
+          sourceExcerpt: f.label,
+          verificationStatus: "reported",
+          enteredBy: admin.id,
+          notes: f.notes,
+        })
+        .returning();
+      await db.insert(facts).values({
+        organizationId: org.id,
+        communityId: community.id,
+        documentId: octDoc.id,
+        factType: f.factType,
+        label: f.label,
+        value: null,
+        numericValue: f.numericValue,
+        unit: f.unit,
+        periodStart: f.periodStart,
+        periodEnd: f.periodEnd,
+        asOfDate: f.asOfDate,
+        sourceReference: "Board Meeting Minutes — October 1, 2026",
+        sourceExcerpt: f.label,
+        verificationStatus: "reported",
+        notes: f.notes,
+        provenanceId: prov.id,
+        createdBy: admin.id,
+      });
+    }
+
+    // All Oct 1 minutes figures remain "reported" (source = meeting minutes).
+  }
+
+  // Data health — honest gaps; 2025 has no fabricated document
   const healthSeeds: {
     year: string | null;
     category: string;
@@ -324,22 +500,54 @@ async function main() {
       category: "meeting_minutes",
       label: "2024 Meeting Minutes",
       status: "available",
-      notes: "Catalog entry present; verify against signed PDF when uploaded.",
+      notes: "Records available in the document catalog.",
     },
     {
       year: "2025",
       category: "meeting_minutes",
       label: "2025 Meeting Minutes",
       status: "missing",
-      notes: "No verified minutes supplied.",
+      notes: "Not currently available. This does not imply records never existed.",
     },
     {
       year: "2026",
       category: "meeting_minutes",
       label: "2026 Meeting Minutes",
       status: "available",
-      notes: "Catalog entry present; verify against signed PDF when uploaded.",
+      notes: "Records available (including October 1, 2026 minutes with reported facts).",
     },
+  ];
+
+  // Upsert meeting-minutes health notes when rows already exist
+  {
+    const existingHealthEarly = await db
+      .select()
+      .from(dataHealthChecks)
+      .where(eq(dataHealthChecks.communityId, community.id));
+    for (const h of healthSeeds) {
+      const match = existingHealthEarly.find((x) => x.label === h.label);
+      if (match) {
+        await db
+          .update(dataHealthChecks)
+          .set({
+            status: h.status,
+            notes: h.notes,
+            year: h.year,
+            category: h.category,
+            updatedAt: new Date(),
+          })
+          .where(eq(dataHealthChecks.id, match.id));
+      }
+    }
+  }
+
+  const healthSeedsContinued: {
+    year: string | null;
+    category: string;
+    label: string;
+    status: "available" | "missing" | "needs_reconciliation" | "pending" | "unknown";
+    notes: string;
+  }[] = [
     {
       year: null,
       category: "accounts_receivable",
@@ -388,7 +596,7 @@ async function main() {
     .select()
     .from(dataHealthChecks)
     .where(eq(dataHealthChecks.communityId, community.id));
-  for (const h of healthSeeds) {
+  for (const h of [...healthSeeds, ...healthSeedsContinued]) {
     if (existingHealth.some((x) => x.label === h.label)) continue;
     await db.insert(dataHealthChecks).values({
       organizationId: org.id,
