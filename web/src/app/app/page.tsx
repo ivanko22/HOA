@@ -1,7 +1,7 @@
 import { requireTenantContext } from "@/lib/auth/config";
 import { getFinancialHealth } from "@/lib/services/financial-health";
 import { KpiCard } from "@/components/finance/kpi-card";
-import { DashboardCharts } from "@/components/finance/dashboard-charts";
+import { FinancialTrendChart } from "@/components/finance/financial-trend-chart";
 
 export default async function FinancialHealthPage() {
   const ctx = await requireTenantContext();
@@ -14,7 +14,8 @@ export default async function FinancialHealthPage() {
           Financial Health
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
-          KPIs show verification status and never coerce missing values to zero.
+          KPIs resolve from the facts repository with verification status.
+          Unknown and conflicting values stay explicit — never coerced to zero.
           Period: {dashboard.period.label} ({dashboard.period.start} →{" "}
           {dashboard.period.end}).
         </p>
@@ -24,14 +25,14 @@ export default async function FinancialHealthPage() {
         aria-label="Key performance indicators"
         className="overflow-hidden border border-[var(--border)] bg-[var(--surface)]"
       >
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-4">
           {dashboard.kpis.map((kpi) => (
             <KpiCard key={kpi.id} kpi={kpi} />
           ))}
         </div>
       </section>
 
-      <DashboardCharts charts={dashboard.charts} />
+      <FinancialTrendChart points={dashboard.trend} />
     </div>
   );
 }

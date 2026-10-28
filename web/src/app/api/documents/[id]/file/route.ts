@@ -4,7 +4,7 @@ import { auth, resolveTenantContext } from "@/lib/auth/config";
 import { db } from "@/lib/db/client";
 import { documents } from "@/lib/db/schema";
 import { can } from "@/lib/domain/permissions";
-import { readDocumentFile } from "@/lib/storage/documents";
+import { getStorageProvider } from "@/lib/storage";
 
 export async function GET(
   _request: Request,
@@ -43,12 +43,12 @@ export async function GET(
   }
 
   try {
-    const bytes = await readDocumentFile(doc.storageKey);
-    return new NextResponse(new Uint8Array(bytes), {
+    const file = await getStorageProvider().getObject(doc.storageKey);
+    return new NextResponse(new Uint8Array(file.body), {
       headers: {
-        "Content-Type": doc.mimeType,
+        "Content-Type": file.mimeType ?? doc.mimeType,
         "Content-Disposition": `inline; filename="${doc.originalFilename ?? "document"}"`,
-        "Content-Length": String(bytes.byteLength),
+        "Content-Length": String(file.body.byteLength),
       },
     });
   } catch {

@@ -15,6 +15,13 @@
       "when": 1793209311320,
       "tag": "0001_daily_scarecrow",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793211394174,
+      "tag": "0002_abandoned_puck",
+      "breakpoints": true
     }
   ]
 }

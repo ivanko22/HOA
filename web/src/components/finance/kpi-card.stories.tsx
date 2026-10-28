@@ -20,6 +20,7 @@ export const VerifiedCash: Story = {
       label: "Cash",
       value: { amount: "125000.00", status: "verified", currency: "USD" },
       displayValue: "$125,000.00",
+      unit: "USD",
       period: {
         start: "2026-01-01",
         end: "2026-12-31",
@@ -27,7 +28,11 @@ export const VerifiedCash: Story = {
       },
       lastVerifiedAt: "2026-03-01",
       verificationStatus: "verified",
-      drilldownHref: "/app/ledger?focus=cash",
+      factId: "fact-1",
+      documentId: "doc-1",
+      sourceReference: "Bank statement",
+      asOfDate: "2026-03-01",
+      drilldownHref: "/app/metrics/cash",
     },
   },
 };
@@ -35,10 +40,11 @@ export const VerifiedCash: Story = {
 export const UnknownReserve: Story = {
   args: {
     kpi: {
-      id: "reserves",
+      id: "reserve_balance",
       label: "Reserve Balance",
       value: { amount: null, status: "unknown", currency: "USD" },
       displayValue: "Unknown",
+      unit: "USD",
       period: {
         start: "2026-01-01",
         end: "2026-12-31",
@@ -46,7 +52,11 @@ export const UnknownReserve: Story = {
       },
       lastVerifiedAt: null,
       verificationStatus: "unknown",
-      drilldownHref: "/app/ledger?focus=reserves",
+      factId: null,
+      documentId: null,
+      sourceReference: null,
+      asOfDate: null,
+      drilldownHref: "/app/metrics/reserve_balance",
     },
   },
 };

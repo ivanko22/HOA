@@ -23,7 +23,7 @@ import {
   assertCan,
   type TenantContext,
 } from "@/lib/domain/permissions";
-import { storeDocumentFile } from "@/lib/storage/documents";
+import { getStorageProvider } from "@/lib/storage";
 import { recordAudit } from "./audit";
 
 export type DocumentListFilters = {
@@ -235,10 +235,11 @@ export async function uploadDocument(
 ) {
   assertCan(ctx.capabilities, "documents.manage");
 
-  const stored = await storeDocumentFile({
+  const stored = await getStorageProvider().putObject({
     communityId: ctx.communityId,
     originalFilename: input.file.name,
-    bytes: input.file.bytes,
+    mimeType: input.file.type || "application/octet-stream",
+    body: input.file.bytes,
   });
 
   const [doc] = await db
@@ -249,10 +250,11 @@ export async function uploadDocument(
       title: input.title,
       category: input.category,
       description: input.description ?? null,
+      storageProvider: stored.storageProvider,
       storageKey: stored.storageKey,
-      originalFilename: input.file.name,
-      mimeType: input.file.type || "application/octet-stream",
-      byteSize: input.file.bytes.byteLength,
+      originalFilename: stored.originalFilename,
+      mimeType: stored.mimeType,
+      byteSize: stored.size,
       documentDate: input.documentDate ?? null,
       periodStart: input.periodStart ?? null,
       periodEnd: input.periodEnd ?? null,

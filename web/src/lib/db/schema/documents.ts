@@ -27,6 +27,7 @@ export const documents = pgTable("documents", {
   category: documentCategoryEnum("category").notNull(),
   title: text("title").notNull(),
   description: text("description"),
+  storageProvider: text("storage_provider").notNull().default("local"),
   storageKey: text("storage_key").notNull(),
   originalFilename: text("original_filename"),
   mimeType: text("mime_type").notNull().default("application/pdf"),

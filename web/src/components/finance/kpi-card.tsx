@@ -20,9 +20,13 @@ export function KpiCard({ kpi }: { kpi: KpiCardData }) {
       <div className="mt-3 space-y-0.5 text-xs text-[var(--muted)]">
         <p>Period: {kpi.period.label}</p>
         <p>
-          Last verified:{" "}
-          {kpi.lastVerifiedAt ? kpi.lastVerifiedAt : "Never"}
+          As of: {kpi.asOfDate ?? kpi.lastVerifiedAt ?? "Unknown"}
         </p>
+        {kpi.sourceReference ? (
+          <p className="truncate" title={kpi.sourceReference}>
+            Source: {kpi.sourceReference}
+          </p>
+        ) : null}
       </div>
       <p className="mt-2 text-xs text-[var(--accent)] opacity-0 transition-opacity group-hover:opacity-100">
         View underlying records →

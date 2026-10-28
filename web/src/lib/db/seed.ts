@@ -41,6 +41,16 @@ async function upsertOrg() {
 }
 
 async function main() {
+  const appEnv = (process.env.APP_ENV ?? "local").toLowerCase();
+  if (appEnv === "staging" || appEnv === "production") {
+    throw new Error(
+      `Refusing to seed when APP_ENV=${appEnv}. Staging/production must not use demo seed data.`,
+    );
+  }
+  if (process.env.ALLOW_DEMO_SEED === "false") {
+    throw new Error("ALLOW_DEMO_SEED=false — seed aborted.");
+  }
+
   console.log("Seeding Community OS (The Willows)…");
   console.log(
     "Policy: only brief-supplied facts are treated as known; all else is unknown/missing.",
@@ -425,18 +435,18 @@ async function main() {
         asOfDate: "2026-10-01",
       },
       {
-        factType: "operating_expenses",
+        factType: "base_operating_expenses",
         label: "Approximate base operating expenses",
         numericValue: "35000.00",
         unit: "USD/month",
         notes:
-          "Approximate base operating expenses from Oct 1, 2026 minutes — reported estimate language retained via unit USD/month.",
+          "Approximate base operating expenses from Oct 1, 2026 minutes — reported.",
         periodStart: null,
         periodEnd: null,
         asOfDate: "2026-10-01",
       },
       {
-        factType: "monthly_dues_collected",
+        factType: "potential_dues_full_collection",
         label: "Potential dues at full collection",
         numericValue: "50000.00",
         unit: "USD/month",
@@ -447,6 +457,17 @@ async function main() {
         asOfDate: "2026-10-01",
       },
     ];
+
+    // Normalize fact types if older seed rows used overlapping types
+    for (const f of factSeeds) {
+      const match = existingFacts.find((x) => x.label === f.label);
+      if (match && match.factType !== f.factType) {
+        await db
+          .update(facts)
+          .set({ factType: f.factType, unit: f.unit, updatedAt: new Date() })
+          .where(eq(facts.id, match.id));
+      }
+    }
 
     for (const f of factSeeds) {
       if (existingFacts.some((x) => x.label === f.label)) continue;
