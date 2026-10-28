@@ -12,7 +12,8 @@ const links = [
   { href: "/app/legal", label: "Legal" },
   { href: "/app/documents", label: "Documents" },
   { href: "/app/ledger", label: "Ledger" },
-  { href: "/app/import", label: "CSV Import" },
+  { href: "/app/imports", label: "Imports" },
+  { href: "/app/reconciliation", label: "Reconciliation" },
   { href: "/app/audit", label: "Audit Log" },
 ];
 

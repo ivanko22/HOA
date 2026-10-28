@@ -11,6 +11,14 @@ describe("permissions", () => {
     const caps = capabilitiesForRoles(["treasurer"]);
     expect(can(caps, "finance.post")).toBe(true);
     expect(can(caps, "community.members.manage")).toBe(false);
+    expect(can(caps, "import.csv")).toBe(true);
+    expect(can(caps, "import.approve")).toBe(true);
+  });
+
+  it("allows property manager to import but not approve", () => {
+    const caps = capabilitiesForRoles(["property_manager"]);
+    expect(can(caps, "import.csv")).toBe(true);
+    expect(can(caps, "import.approve")).toBe(false);
   });
 
   it("gives owner transparency but not finance.write", () => {

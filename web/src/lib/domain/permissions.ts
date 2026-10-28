@@ -23,6 +23,7 @@ export const capabilities = [
   "data_health.read",
   "data_health.manage",
   "import.csv",
+  "import.approve",
   "audit.read",
 ] as const;
 
@@ -53,6 +54,7 @@ const roleCapabilityMap: Record<RoleCode, readonly Capability[]> = {
     "data_health.read",
     "data_health.manage",
     "import.csv",
+    "import.approve",
     "audit.read",
   ],
   board_member: [
@@ -87,6 +89,7 @@ const roleCapabilityMap: Record<RoleCode, readonly Capability[]> = {
     "data_health.read",
     "data_health.manage",
     "import.csv",
+    "import.approve",
     "audit.read",
   ],
   property_manager: [
