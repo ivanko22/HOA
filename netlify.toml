@@ -1,12 +1,17 @@
 # Community OS (Next.js App Router) lives in web/.
-# Do NOT pin @netlify/plugin-nextjs — Next.js 16 uses Netlify's automatic
-# OpenNext adapter. Pinning the legacy plugin (or publishing .next as a static
-# site without the adapter) produces a root 404.
+#
+# Root cause of the site-wide 404: deploys uploaded `.next` as static files with
+# "No functions deployed". App Router SSR needs the Next.js OpenNext adapter to
+# provision Netlify Functions. Declare the plugin explicitly so the adapter
+# always runs for this monorepo layout.
 [build]
   base = "web"
-  command = "npm install --include=dev && npm run build"
+  command = "npm run build"
   publish = ".next"
 
 [build.environment]
   NODE_VERSION = "22"
   NEXT_TELEMETRY_DISABLED = "1"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
