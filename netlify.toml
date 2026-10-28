@@ -1,7 +1,12 @@
-# The Next.js app lives in web/, not at the repo root.
+# Community OS (Next.js App Router) lives in web/.
+# Do NOT pin @netlify/plugin-nextjs — Next.js 16 uses Netlify's automatic
+# OpenNext adapter. Pinning the legacy plugin (or publishing .next as a static
+# site without the adapter) produces a root 404.
 [build]
   base = "web"
-  # Install deps explicitly (incl. dev deps) so `next` is available even when the
-  # build environment skips automatic installation.
   command = "npm install --include=dev && npm run build"
   publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
