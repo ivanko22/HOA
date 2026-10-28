@@ -28,11 +28,15 @@ See `.env.example` for the full list. Minimum for a deploy:
 
 ## Migrations
 
+Local / self-hosted Postgres:
+
 ```bash
 npm run db:migrate
 ```
 
-Apply migrations before starting the app. Do not run seed against shared staging/production.
+**Netlify Database:** committed SQL under `web/netlify/database/migrations/` is applied automatically on deploy when `@netlify/database` is installed. Do not run `drizzle-kit migrate` against `NETLIFY_DB_URL`.
+
+Do not run seed against shared staging/production. On an empty production database, open `/login` and use **Create first admin** (only available when `users` is empty).
 
 ## Netlify
 
