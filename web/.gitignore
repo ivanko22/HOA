@@ -49,5 +49,5 @@ next-env.d.ts
 # local document uploads
 /storage
 
-# Netlify-managed build plugins
-/.netlify/plugins/
+# Netlify local/build artifacts (never commit)
+/.netlify/
