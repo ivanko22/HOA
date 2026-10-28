@@ -1,0 +1,7 @@
+# The Next.js app lives in web/, not at the repo root.
+[build]
+  base = "web"
+  # Install deps explicitly (incl. dev deps) so `next` is available even when the
+  # build environment skips automatic installation.
+  command = "npm install --include=dev && npm run build"
+  publish = ".next"
