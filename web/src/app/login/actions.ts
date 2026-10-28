@@ -8,14 +8,23 @@ import {
 
 export async function bootstrapAction(formData: FormData) {
   if (!(await needsBootstrap())) {
-    throw new Error("Bootstrap is only available when no users exist.");
+    throw new Error(
+      "Registration is closed. Ask an admin for an invite link.",
+    );
   }
 
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
   const name = String(formData.get("name") ?? "Admin");
   const communityName = String(formData.get("communityName") ?? "The Willows");
+  const bootstrapSecret = String(formData.get("bootstrapSecret") || "") || undefined;
 
-  await bootstrapFirstAdmin({ email, password, name, communityName });
+  await bootstrapFirstAdmin({
+    email,
+    password,
+    name,
+    communityName,
+    bootstrapSecret,
+  });
   redirect("/login?created=1");
 }

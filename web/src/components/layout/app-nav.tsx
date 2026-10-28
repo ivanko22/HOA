@@ -14,6 +14,7 @@ const links = [
   { href: "/app/ledger", label: "Ledger" },
   { href: "/app/imports", label: "Imports" },
   { href: "/app/reconciliation", label: "Reconciliation" },
+  { href: "/app/members", label: "Members" },
   { href: "/app/audit", label: "Audit Log" },
 ];
 

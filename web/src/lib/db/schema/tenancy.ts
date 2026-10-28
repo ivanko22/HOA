@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   pgTable,
   text,
   timestamp,
@@ -51,6 +52,8 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   passwordHash: text("password_hash"),
   isPlatformAdmin: boolean("is_platform_admin").notNull().default(false),
+  /** Set when the user accepts an invite link (email possession proof). */
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -58,6 +61,39 @@ export const users = pgTable("users", {
     .defaultNow()
     .notNull(),
 });
+
+/**
+ * Invite-only registration. There is no public sign-up.
+ * An existing community_admin (or platform admin) creates an invite; the
+ * recipient confirms by opening the emailed (or shared) token link.
+ */
+export const userInvites = pgTable(
+  "user_invites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => communities.id),
+    email: text("email").notNull(),
+    name: text("name"),
+    role: roleCodeEnum("role").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    invitedBy: uuid("invited_by").references(() => users.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("user_invites_token_hash").on(t.tokenHash),
+    index("user_invites_community_email").on(t.communityId, t.email),
+  ],
+);
 
 export const memberships = pgTable(
   "memberships",

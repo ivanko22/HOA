@@ -36,7 +36,9 @@ npm run db:migrate
 
 **Netlify Database:** committed SQL under `web/netlify/database/migrations/` is applied automatically on deploy when `@netlify/database` is installed. Do not run `drizzle-kit migrate` against `NETLIFY_DB_URL`.
 
-Do not run seed against shared staging/production. On an empty production database, open `/login` and use **Create first admin** (only available when `users` is empty).
+Do not run seed against shared staging/production. On an empty production database, open `/login` and use **Create first admin** (only available when `users` is empty). Set `BOOTSTRAP_SECRET` so strangers cannot claim that form.
+
+After the first admin exists there is **no public registration**. Admins invite people from **Members**; invitees confirm via email link (`RESEND_API_KEY`) or a copied invite URL.
 
 ## Netlify
 

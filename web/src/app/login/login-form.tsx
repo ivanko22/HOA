@@ -7,8 +7,10 @@ import { bootstrapAction } from "./actions";
 
 export function LoginForm({
   needsBootstrap = false,
+  bootstrapSecretRequired = false,
 }: {
   needsBootstrap?: boolean;
+  bootstrapSecretRequired?: boolean;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -17,6 +19,7 @@ export function LoginForm({
   );
   const [pending, setPending] = useState(false);
   const created = params.get("created") === "1";
+  const accepted = params.get("accepted") === "1";
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -47,15 +50,14 @@ export function LoginForm({
           Create first admin
         </h1>
         <p className="text-sm text-[var(--muted)]">
-          This database has no users yet. Create the first community admin, then
-          sign in.
+          One-time setup for an empty database. After this, registration is
+          invite-only — new members must be invited and confirm by email link.
         </p>
         <label className="block text-sm">
           <span className="text-[var(--muted)]">Your name</span>
           <input
             name="name"
             required
-            defaultValue="Willows Treasurer"
             className="mt-1 w-full border border-[var(--border)] bg-white px-3 py-2 text-[var(--foreground)]"
           />
         </label>
@@ -74,7 +76,6 @@ export function LoginForm({
             name="email"
             type="email"
             required
-            defaultValue="treasurer@willows.local"
             className="mt-1 w-full border border-[var(--border)] bg-white px-3 py-2 text-[var(--foreground)]"
           />
         </label>
@@ -88,6 +89,18 @@ export function LoginForm({
             className="mt-1 w-full border border-[var(--border)] bg-white px-3 py-2 text-[var(--foreground)]"
           />
         </label>
+        {bootstrapSecretRequired ? (
+          <label className="block text-sm">
+            <span className="text-[var(--muted)]">Bootstrap secret</span>
+            <input
+              name="bootstrapSecret"
+              type="password"
+              required
+              autoComplete="off"
+              className="mt-1 w-full border border-[var(--border)] bg-white px-3 py-2 text-[var(--foreground)]"
+            />
+          </label>
+        ) : null}
         <button
           type="submit"
           className="w-full bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-110"
@@ -111,6 +124,11 @@ export function LoginForm({
           Admin created. Sign in with the email and password you just set.
         </p>
       ) : null}
+      {accepted ? (
+        <p className="text-sm text-emerald-800" role="status">
+          Invite accepted and email confirmed. Sign in with your new password.
+        </p>
+      ) : null}
       {error ? (
         <p className="text-sm text-rose-700" role="alert">
           {error}
@@ -122,7 +140,7 @@ export function LoginForm({
           name="email"
           type="email"
           required
-          defaultValue="treasurer@willows.local"
+          autoComplete="username"
           className="mt-1 w-full border border-[var(--border)] bg-white px-3 py-2 text-[var(--foreground)]"
         />
       </label>
@@ -132,6 +150,7 @@ export function LoginForm({
           name="password"
           type="password"
           required
+          autoComplete="current-password"
           className="mt-1 w-full border border-[var(--border)] bg-white px-3 py-2 text-[var(--foreground)]"
         />
       </label>
@@ -143,7 +162,8 @@ export function LoginForm({
         {pending ? "Signing in…" : "Continue"}
       </button>
       <p className="text-xs text-[var(--muted)]">
-        Demo community: The Willows · Tulsa, OK
+        No public registration. Access is invite-only; an admin must invite you
+        and you confirm via the email link.
       </p>
     </form>
   );
