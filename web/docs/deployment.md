@@ -36,9 +36,9 @@ Apply migrations before starting the app. Do not run seed against shared staging
 
 ## Netlify
 
-The app lives in `web/`. Root `netlify.toml` sets `base = "web"` and `publish = ".next"`.
+The app lives in `web/`. Root `netlify.toml` sets `base = "web"`, `publish = ".next"`, and explicitly enables `@netlify/plugin-nextjs` (OpenNext adapter).
 
-Netlify runs Next.js 16 through its **automatic OpenNext adapter**. Do **not** add `@netlify/plugin-nextjs` to `package.json` or `[[plugins]]` unless you intentionally pin a legacy adapter (that path has caused root 404s when misconfigured).
+A healthy deploy summary must show **Netlify Functions** for the Next.js server handler. If the deploy says “No functions deployed” and only uploads `.next` HTML assets, every route will 404 — the adapter did not run.
 
 In the Netlify UI, set at least:
 
@@ -48,4 +48,4 @@ In the Netlify UI, set at least:
 - `AUTH_URL=https://<your-site>.netlify.app` (or custom domain)
 - `STORAGE_PROVIDER=s3` plus S3 credentials for real uploads
 
-After env vars are set, trigger a clear cache and redeploy. A successful deploy should serve `/` (redirects to `/login` or `/app`), not Netlify’s static “Page not found”.
+After env vars are set, trigger a clear cache and redeploy. `/` should redirect to `/login` or `/app`, not Netlify’s static “Page not found”.
