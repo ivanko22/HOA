@@ -9,6 +9,7 @@ import {
   communities,
   dataHealthChecks,
   documents,
+  externalSources,
   facts,
   financialPeriods,
   memberships,
@@ -20,6 +21,7 @@ import {
   legalCases,
   vendors,
   auditEvents,
+  validationTargets,
 } from "./schema";
 
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD ?? "willows-demo";
@@ -696,6 +698,135 @@ async function main() {
     });
   }
 
+  // Google Drive external source (Willows Condos Records) — sync is manual / Sync now.
+  {
+    const existingSources = await db
+      .select()
+      .from(externalSources)
+      .where(eq(externalSources.communityId, community.id));
+    const existingSource = existingSources.find(
+      (s) => s.name === "Willows Condos Records",
+    );
+    if (!existingSource) {
+      await db.insert(externalSources).values({
+        organizationId: org.id,
+        communityId: community.id,
+        provider: "google_drive",
+        name: "Willows Condos Records",
+        status: "active",
+        config: {
+          folderId: "1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y",
+          folderUrl:
+            "https://drive.google.com/drive/folders/1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y",
+          folderName: "Willows Condos Records",
+        },
+      });
+    }
+  }
+
+  // Validation targets — cross-check only; never overwrite Community OS facts.
+  const targets: {
+    key: string;
+    label: string;
+    factType: string;
+    expectedNumeric: string;
+    periodStart?: string;
+    periodEnd?: string;
+    asOfDate?: string;
+    notes: string;
+  }[] = [
+    {
+      key: "sep_2026_cash_balance",
+      label: "Sep 2026 cash balance (~50,184)",
+      factType: "cash_balance",
+      expectedNumeric: "50184.00",
+      asOfDate: "2026-09-30",
+      notes: "Validation target only — do not force.",
+    },
+    {
+      key: "sep_2026_hoa_dues",
+      label: "Sep 2026 HOA dues",
+      factType: "monthly_dues_collected",
+      expectedNumeric: "51688.10",
+      periodStart: "2026-09-01",
+      periodEnd: "2026-09-30",
+      notes: "Validation target only — do not force.",
+    },
+    {
+      key: "sep_2026_operating_income",
+      label: "Sep 2026 total operating income",
+      factType: "operating_income",
+      expectedNumeric: "67540.60",
+      periodStart: "2026-09-01",
+      periodEnd: "2026-09-30",
+      notes: "Validation target only — do not force.",
+    },
+    {
+      key: "sep_2026_operating_expense",
+      label: "Sep 2026 total operating expense",
+      factType: "operating_expenses",
+      expectedNumeric: "60298.70",
+      periodStart: "2026-09-01",
+      periodEnd: "2026-09-30",
+      notes: "Validation target only — do not force.",
+    },
+    {
+      key: "sep_2026_willows_assessment",
+      label: "Sep 2026 Willows Assessment",
+      factType: "special_assessment_collected",
+      expectedNumeric: "21282.55",
+      periodStart: "2026-09-01",
+      periodEnd: "2026-09-30",
+      notes: "Validation target only — do not force.",
+    },
+    {
+      key: "ytd_2026_operating_expenses",
+      label: "2026 YTD operating expenses (~380,705)",
+      factType: "operating_expenses",
+      expectedNumeric: "380705.00",
+      periodStart: "2026-01-01",
+      periodEnd: "2026-09-30",
+      notes: "Approximate YTD target — do not force.",
+    },
+    {
+      key: "reserve_balance_near_zero",
+      label: "Reserve balance near zero",
+      factType: "reserve_balance",
+      expectedNumeric: "0.00",
+      asOfDate: "2026-09-30",
+      notes: "Near-zero reserve target — do not force.",
+    },
+    {
+      key: "oct_2024_capital_need",
+      label: "Oct 2024 ~$4M capital-need estimate",
+      factType: "capital_need_estimate",
+      expectedNumeric: "4000000.00",
+      asOfDate: "2024-10-01",
+      notes: "From Oct 2024 minutes narrative — validation target only.",
+    },
+  ];
+
+  const existingTargets = await db
+    .select()
+    .from(validationTargets)
+    .where(eq(validationTargets.communityId, community.id));
+  for (const t of targets) {
+    if (existingTargets.some((x) => x.key === t.key)) continue;
+    await db.insert(validationTargets).values({
+      organizationId: org.id,
+      communityId: community.id,
+      key: t.key,
+      label: t.label,
+      factType: t.factType,
+      expectedNumeric: t.expectedNumeric,
+      periodStart: t.periodStart ?? null,
+      periodEnd: t.periodEnd ?? null,
+      asOfDate: t.asOfDate ?? null,
+      tolerance: t.key.includes("near_zero") ? "500.00" : "1.00",
+      notes: t.notes,
+    });
+  }
+
   await db.insert(auditEvents).values({
     organizationId: org.id,
     communityId: community.id,
@@ -706,6 +837,7 @@ async function main() {
     after: JSON.stringify({
       message:
         "Seed completed with unknown financials; no invented verified balances.",
+      googleDriveFolderId: "1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y",
     }),
   });
 

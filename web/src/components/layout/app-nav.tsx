@@ -11,6 +11,7 @@ const links = [
   { href: "/app/projects", label: "Projects" },
   { href: "/app/legal", label: "Legal" },
   { href: "/app/documents", label: "Documents" },
+  { href: "/app/sources", label: "Sources" },
   { href: "/app/ledger", label: "Ledger" },
   { href: "/app/imports", label: "Imports" },
   { href: "/app/reconciliation", label: "Reconciliation" },

@@ -40,6 +40,19 @@ Do not run seed against shared staging/production. On an empty production databa
 
 After the first admin exists there is **no public registration**. Admins invite people from **Members**; invitees confirm via email link (`RESEND_API_KEY`) or a copied invite URL.
 
+## Google Drive sync
+
+Seed / UI source: **Willows Condos Records**  
+Folder ID `1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y`
+
+Set **one** of:
+
+- `GOOGLE_DRIVE_API_KEY` (public-link folders)
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` (full JSON)
+- `GOOGLE_APPLICATION_CREDENTIALS` (path to service-account JSON)
+
+Then open **Sources → Willows Condos Records → Sync now**. Missing credentials fail gracefully and list the required env vars. Snapshots go to object storage; extractions facts/transactions stay `needs_review`.
+
 ## Netlify
 
 The app lives in `web/`. Root `netlify.toml` sets `base = "web"`, `publish = ".next"`, and explicitly enables `@netlify/plugin-nextjs` (OpenNext adapter).
