@@ -28,6 +28,14 @@ On `documents` (and future `import_batches`):
 - Root: `DOCUMENT_STORAGE_ROOT` (default `./storage/documents`)
 - Suitable for local development only
 - `getSignedUrl` returns `null` — always use the authenticated route
+- Not used on Netlify. The function directory is read-only, so `mkdir /var/task/storage` fails.
+
+### `NetlifyBlobsStorageProvider` (automatic when `NETLIFY=true`)
+
+- Store name: `documents`
+- Used for Sync now and document uploads on the Netlify site
+- Bytes are read back through the same authenticated `/api/documents/[id]/file` route
+- Set `STORAGE_PROVIDER=netlify-blobs` to force this outside Netlify (requires Blobs credentials)
 
 ### `S3CompatibleStorageProvider` (`STORAGE_PROVIDER=s3`)
 

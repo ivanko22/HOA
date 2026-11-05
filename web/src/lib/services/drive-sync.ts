@@ -29,7 +29,7 @@ import {
 } from "@/lib/integrations/google-drive/client";
 import { getGoogleDriveCredentialsStatus } from "@/lib/integrations/google-drive/credentials";
 import { GoogleDriveConfigError } from "@/lib/integrations/google-drive/types";
-import { getStorageProvider } from "@/lib/storage";
+import { getStorageProvider, isFatalStorageError } from "@/lib/storage";
 import { recordAudit } from "./audit";
 
 export type SyncReport = {
@@ -113,6 +113,8 @@ const WILLOWS_FOLDER_ID = "1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y";
  * A full folder sync that runs longer is killed and the browser shows 502.
  */
 const SYNC_CHUNK_BUDGET_MS = 8_000;
+/** Leave room for one Drive download without crossing the function limit. */
+const DOWNLOAD_RESERVE_MS = 7_000;
 
 function syncProgressSignature(report: SyncReport) {
   return [
@@ -591,6 +593,7 @@ export async function syncExternalSource(
 
     if (!yielded && report.phase === "files") {
       const start = report.resumeFrom ?? 0;
+      let downloadsStarted = 0;
       for (
         let fileIndex = start;
         fileIndex < report.tree.length;
@@ -698,6 +701,12 @@ export async function syncExternalSource(
       }
 
       try {
+        if (downloadsStarted > 0 || Date.now() + DOWNLOAD_RESERVE_MS > deadline) {
+          report.resumeFrom = fileIndex;
+          yielded = true;
+          break;
+        }
+        downloadsStarted += 1;
         const downloaded = await downloadDriveFile({
           id: node.id,
           mimeType: node.mimeType || "application/octet-stream",
@@ -923,6 +932,12 @@ export async function syncExternalSource(
           }
         }
       } catch (err) {
+        if (isFatalStorageError(err)) {
+          const detail = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `Cannot store files on this server (${detail}). Netlify keeps documents in Netlify Blobs, not the function disk.`,
+          );
+        }
         report.totals.errors += 1;
         const message = err instanceof Error ? err.message : String(err);
         report.fileErrors.push({ path: node.path, error: message });

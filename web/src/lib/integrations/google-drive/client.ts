@@ -40,6 +40,13 @@ export function driveRetryDelayMs(
   return Math.min(backoff + jitter, MAX_RETRY_DELAY_MS);
 }
 
+export function isDriveTimeout(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "TimeoutError" || err.name === "AbortError")
+  );
+}
+
 /** Retry transient Drive/token responses. Non-retryable statuses return immediately. */
 export async function withDriveRetries(
   send: () => Promise<Response>,
@@ -54,7 +61,16 @@ export async function withDriveRetries(
   const random = opts?.random ?? Math.random;
   let last: Response | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const res = await send();
+    let res: Response;
+    try {
+      res = await send();
+    } catch (err) {
+      if (isDriveTimeout(err) || attempt === maxAttempts - 1) throw err;
+      await sleep(
+        driveRetryDelayMs(attempt, new Response(null, { status: 503 }), random),
+      );
+      continue;
+    }
     if (res.ok || !RETRYABLE_DRIVE_STATUSES.has(res.status)) return res;
     last = res;
     if (attempt === maxAttempts - 1) break;
@@ -146,19 +162,29 @@ async function getAccessToken(): Promise<{
 
 async function driveFetch(
   path: string,
-  init?: RequestInit & { raw?: boolean },
+  init?: RequestInit & { timeoutMs?: number; maxAttempts?: number; raw?: boolean },
 ): Promise<Response> {
   const auth = await getAccessToken();
   const url = new URL(`https://www.googleapis.com/drive/v3/${path}`);
+  const timeoutMs = init?.timeoutMs;
+  const maxAttempts = init?.maxAttempts;
+  const requestInit: RequestInit = { ...init };
+  delete (requestInit as { timeoutMs?: number }).timeoutMs;
+  delete (requestInit as { maxAttempts?: number }).maxAttempts;
+  delete (requestInit as { raw?: boolean }).raw;
   return withDriveRetries(() => {
-    const attemptHeaders = new Headers(init?.headers);
+    const attemptHeaders = new Headers(requestInit.headers);
     if (auth.mode === "api_key") {
       url.searchParams.set("key", auth.apiKey!);
     } else {
       attemptHeaders.set("Authorization", `Bearer ${auth.accessToken}`);
     }
-    return fetch(url, { ...init, headers: attemptHeaders });
-  });
+    return fetch(url, {
+      ...requestInit,
+      headers: attemptHeaders,
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : requestInit.signal,
+    });
+  }, { maxAttempts });
 }
 
 export async function listDriveChildren(
@@ -223,6 +249,34 @@ export async function listDriveTree(
   return flat;
 }
 
+const FILE_DOWNLOAD_TIMEOUT_MS = 6_000;
+
+async function fetchDriveFile(
+  path: string,
+  fileName: string,
+  action: "download" | "export",
+): Promise<Response> {
+  try {
+    const res = await driveFetch(path, {
+      timeoutMs: FILE_DOWNLOAD_TIMEOUT_MS,
+      maxAttempts: 1,
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Drive ${action} failed for ${fileName}: ${res.status} ${await responseErrorSnippet(res)}`,
+      );
+    }
+    return res;
+  } catch (err) {
+    if (isDriveTimeout(err)) {
+      throw new Error(
+        `Drive ${action} timed out for ${fileName} before the host killed the request`,
+      );
+    }
+    throw err;
+  }
+}
+
 export async function downloadDriveFile(file: {
   id: string;
   mimeType: string;
@@ -248,14 +302,11 @@ export async function downloadDriveFile(file: {
       mime: "application/pdf",
       ext: "pdf",
     };
-    const res = await driveFetch(
+    const res = await fetchDriveFile(
       `files/${file.id}/export?mimeType=${encodeURIComponent(mapped.mime)}`,
+      file.name,
+      "export",
     );
-    if (!res.ok) {
-      throw new Error(
-        `Drive export failed for ${file.name}: ${res.status} ${await responseErrorSnippet(res)}`,
-      );
-    }
     const ab = await res.arrayBuffer();
     const base = file.name.replace(/\.[^.]+$/, "");
     return {
@@ -265,12 +316,11 @@ export async function downloadDriveFile(file: {
     };
   }
 
-  const res = await driveFetch(`files/${file.id}?alt=media`);
-  if (!res.ok) {
-    throw new Error(
-      `Drive download failed for ${file.name}: ${res.status} ${await responseErrorSnippet(res)}`,
-    );
-  }
+  const res = await fetchDriveFile(
+    `files/${file.id}?alt=media`,
+    file.name,
+    "download",
+  );
   const ab = await res.arrayBuffer();
   return {
     bytes: Buffer.from(ab),

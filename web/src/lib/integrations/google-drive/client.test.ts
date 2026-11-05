@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { driveRetryDelayMs, withDriveRetries } from "./client";
+import { driveRetryDelayMs, isDriveTimeout, withDriveRetries } from "./client";
 
 describe("withDriveRetries", () => {
   it("retries a Drive 502 and returns the later success", async () => {
@@ -28,6 +28,22 @@ describe("withDriveRetries", () => {
       { sleep: async () => {}, random: () => 0 },
     );
     expect(res.status).toBe(400);
+    expect(calls).toBe(1);
+  });
+
+  it("does not retry a download timeout", async () => {
+    let calls = 0;
+    const timeout = new Error("timed out");
+    timeout.name = "TimeoutError";
+    await expect(
+      withDriveRetries(
+        async () => {
+          calls += 1;
+          throw timeout;
+        },
+        { sleep: async () => {}, random: () => 0, maxAttempts: 4 },
+      ),
+    ).rejects.toSatisfy(isDriveTimeout);
     expect(calls).toBe(1);
   });
 
