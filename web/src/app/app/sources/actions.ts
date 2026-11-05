@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 import { requireTenantContext } from "@/lib/auth/config";
 import {
   ensureWillowsDriveSource,
@@ -18,11 +18,22 @@ export async function ensureWillowsSourceAction() {
 export async function syncSourceAction(formData: FormData) {
   const ctx = await requireTenantContext();
   const sourceId = String(formData.get("sourceId") ?? "");
-  const result = await syncExternalSource(ctx, sourceId);
-  revalidatePath("/app/sources");
-  revalidatePath(`/app/sources/${sourceId}`);
-  revalidatePath("/app/sources/reconciliation");
-  revalidatePath("/app/documents");
-  revalidatePath("/app/data-health");
-  redirect(`/app/sources/${sourceId}?run=${result.runId}`);
+  const resumeRaw = String(formData.get("resumeRunId") ?? "");
+  try {
+    const result = await syncExternalSource(ctx, sourceId, {
+      resumeRunId: resumeRaw || undefined,
+    });
+    revalidatePath("/app/sources");
+    revalidatePath(`/app/sources/${sourceId}`);
+    revalidatePath("/app/sources/reconciliation");
+    revalidatePath("/app/documents");
+    revalidatePath("/app/data-health");
+    const params = new URLSearchParams({ run: result.runId });
+    if (result.report.status === "running") params.set("continue", "1");
+    redirect(`/app/sources/${sourceId}?${params.toString()}`);
+  } catch (err) {
+    unstable_rethrow(err);
+    revalidatePath(`/app/sources/${sourceId}`);
+    redirect(`/app/sources/${sourceId}?syncError=1`);
+  }
 }

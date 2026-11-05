@@ -9,17 +9,19 @@ import {
 import type { SyncReport } from "@/lib/services/drive-sync";
 import { Badge } from "@/components/ui/badge";
 import { syncSourceAction } from "../actions";
+import { ContinueSync } from "../continue-sync";
 
 export default async function SourceDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ run?: string }>;
+  searchParams: Promise<{ run?: string; continue?: string; syncError?: string }>;
 }) {
   const ctx = await requireTenantContext();
   const { id } = await params;
-  await searchParams;
+  const sp = await searchParams;
+  const autoContinue = sp.continue === "1";
   const source = await getExternalSource(ctx, id);
   const files = await listSourceFiles(ctx, id);
   const latest = await getLatestSyncRun(ctx, id);
@@ -63,6 +65,56 @@ export default async function SourceDetailPage({
           </form>
         ) : null}
       </div>
+
+      {sp.syncError === "1" ? (
+        <div
+          className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-950"
+          role="alert"
+        >
+          Sync could not finish in this request. Use Continue sync if a run is
+          still in progress, or Sync now to start again.
+        </div>
+      ) : null}
+
+      {latest?.status === "running" ? (
+        <div className="border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+          <p className="font-semibold">Sync in progress</p>
+          <p className="mt-1">
+            {report?.phase === "listing"
+              ? "Listing the Drive folder."
+              : "Saving files from Drive."}{" "}
+            Each step stays short so the host does not return a 502.
+          </p>
+          {autoContinue ? (
+            <ContinueSync
+              sourceId={source.id}
+              runId={latest.id}
+              resumeFrom={report?.resumeFrom ?? 0}
+            />
+          ) : (
+            <form action={syncSourceAction} className="mt-3">
+              <input type="hidden" name="sourceId" value={source.id} />
+              <input type="hidden" name="resumeRunId" value={latest.id} />
+              <button
+                type="submit"
+                className="bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:brightness-110"
+              >
+                Continue sync
+              </button>
+            </form>
+          )}
+        </div>
+      ) : null}
+
+      {latest?.status === "failed" && latest.errorMessage ? (
+        <div
+          className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-950"
+          role="alert"
+        >
+          <p className="font-semibold">Sync failed</p>
+          <p className="mt-1">{latest.errorMessage}</p>
+        </div>
+      ) : null}
 
       {latest?.status === "needs_credentials" ||
       (report?.missingCredentials?.length ?? 0) > 0 ? (
@@ -193,6 +245,19 @@ export default async function SourceDetailPage({
                 .join("\n")}
             </pre>
           </div>
+
+          {report.fileErrors?.length ? (
+            <div>
+              <h3 className="font-medium">File errors</h3>
+              <ul className="mt-2 space-y-1 text-sm">
+                {report.fileErrors.slice(0, 20).map((err) => (
+                  <li key={`${err.path}:${err.error}`}>
+                    {err.path}: {err.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
           <p className="text-sm">
             <Link

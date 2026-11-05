@@ -2,6 +2,7 @@ import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   getGoogleDriveCredentialsStatus,
+  parseServiceAccountJson,
 } from "./credentials";
 import {
   GoogleDriveConfigError,
@@ -12,6 +13,64 @@ import {
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_FIELDS =
   "nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,md5Checksum,version,webViewLink,trashed)";
+
+/** Google (and the Netlify gateway in front of it) uses these for transient faults. */
+const RETRYABLE_DRIVE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_DRIVE_ATTEMPTS = 4;
+const MAX_RETRY_DELAY_MS = 2_000;
+
+function defaultSleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function driveRetryDelayMs(
+  attempt: number,
+  response: Response,
+  random: () => number = Math.random,
+): number {
+  const header = response.headers.get("retry-after");
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS);
+    }
+  }
+  const backoff = 200 * 2 ** attempt;
+  const jitter = Math.floor(random() * 100);
+  return Math.min(backoff + jitter, MAX_RETRY_DELAY_MS);
+}
+
+/** Retry transient Drive/token responses. Non-retryable statuses return immediately. */
+export async function withDriveRetries(
+  send: () => Promise<Response>,
+  opts?: {
+    maxAttempts?: number;
+    sleep?: (ms: number) => Promise<void>;
+    random?: () => number;
+  },
+): Promise<Response> {
+  const maxAttempts = opts?.maxAttempts ?? MAX_DRIVE_ATTEMPTS;
+  const sleep = opts?.sleep ?? defaultSleep;
+  const random = opts?.random ?? Math.random;
+  let last: Response | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const res = await send();
+    if (res.ok || !RETRYABLE_DRIVE_STATUSES.has(res.status)) return res;
+    last = res;
+    if (attempt === maxAttempts - 1) break;
+    await sleep(driveRetryDelayMs(attempt, res, random));
+  }
+  return last as Response;
+}
+
+async function responseErrorSnippet(res: Response): Promise<string> {
+  try {
+    const text = (await res.text()).replace(/\s+/g, " ").trim();
+    return text.slice(0, 500);
+  } catch {
+    return "";
+  }
+}
 
 type TokenCache = { accessToken: string; expiresAtMs: number };
 let cachedSaToken: TokenCache | null = null;
@@ -39,11 +98,7 @@ async function getAccessToken(): Promise<{
   }
   if (!raw) throw new GoogleDriveConfigError(["GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON"]);
 
-  const sa = JSON.parse(raw) as {
-    client_email: string;
-    private_key: string;
-    token_uri?: string;
-  };
+  const sa = parseServiceAccountJson(raw);
 
   const header = Buffer.from(
     JSON.stringify({ alg: "RS256", typ: "JWT" }),
@@ -63,20 +118,19 @@ async function getAccessToken(): Promise<{
   const signature = signer.sign(sa.private_key, "base64url");
   const jwt = `${unsigned}.${signature}`;
 
-  const tokenRes = await fetch(
-    sa.token_uri || "https://oauth2.googleapis.com/token",
-    {
+  const tokenRes = await withDriveRetries(() =>
+    fetch(sa.token_uri || "https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
         assertion: jwt,
       }),
-    },
+    }),
   );
   if (!tokenRes.ok) {
     throw new Error(
-      `Google service-account token exchange failed: ${tokenRes.status} ${await tokenRes.text()}`,
+      `Google service-account token exchange failed: ${tokenRes.status} ${await responseErrorSnippet(tokenRes)}`,
     );
   }
   const tokenJson = (await tokenRes.json()) as {
@@ -96,17 +150,20 @@ async function driveFetch(
 ): Promise<Response> {
   const auth = await getAccessToken();
   const url = new URL(`https://www.googleapis.com/drive/v3/${path}`);
-  const headers = new Headers(init?.headers);
-  if (auth.mode === "api_key") {
-    url.searchParams.set("key", auth.apiKey!);
-  } else {
-    headers.set("Authorization", `Bearer ${auth.accessToken}`);
-  }
-  const res = await fetch(url, { ...init, headers });
-  return res;
+  return withDriveRetries(() => {
+    const attemptHeaders = new Headers(init?.headers);
+    if (auth.mode === "api_key") {
+      url.searchParams.set("key", auth.apiKey!);
+    } else {
+      attemptHeaders.set("Authorization", `Bearer ${auth.accessToken}`);
+    }
+    return fetch(url, { ...init, headers: attemptHeaders });
+  });
 }
 
-async function listChildren(folderId: string): Promise<DriveListedItem[]> {
+export async function listDriveChildren(
+  folderId: string,
+): Promise<DriveListedItem[]> {
   const files: DriveListedItem[] = [];
   let pageToken: string | undefined;
   do {
@@ -117,8 +174,9 @@ async function listChildren(folderId: string): Promise<DriveListedItem[]> {
     if (pageToken) path += `&pageToken=${encodeURIComponent(pageToken)}`;
     const res = await driveFetch(path);
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Drive list failed (${res.status}): ${body}`);
+      throw new Error(
+        `Drive list failed (${res.status}): ${await responseErrorSnippet(res)}`,
+      );
     }
     const json = (await res.json()) as {
       files?: DriveListedItem[];
@@ -138,7 +196,7 @@ export async function listDriveTree(
   const flat: DriveTreeNode[] = [];
 
   async function walk(folderId: string, pathPrefix: string) {
-    const children = await listChildren(folderId);
+    const children = await listDriveChildren(folderId);
     for (const child of children) {
       const isFolder = child.mimeType === FOLDER_MIME;
       const path = `${pathPrefix}/${child.name}`.replace(/\/+/g, "/");
@@ -195,7 +253,7 @@ export async function downloadDriveFile(file: {
     );
     if (!res.ok) {
       throw new Error(
-        `Drive export failed for ${file.name}: ${res.status} ${await res.text()}`,
+        `Drive export failed for ${file.name}: ${res.status} ${await responseErrorSnippet(res)}`,
       );
     }
     const ab = await res.arrayBuffer();
@@ -210,7 +268,7 @@ export async function downloadDriveFile(file: {
   const res = await driveFetch(`files/${file.id}?alt=media`);
   if (!res.ok) {
     throw new Error(
-      `Drive download failed for ${file.name}: ${res.status} ${await res.text()}`,
+      `Drive download failed for ${file.name}: ${res.status} ${await responseErrorSnippet(res)}`,
     );
   }
   const ab = await res.arrayBuffer();

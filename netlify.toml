@@ -15,3 +15,10 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+# Sync now used to run the entire Drive walk inside one invocation. Netlify
+# kills that function (often as a browser 502) once it passes the plan limit.
+# 26s is the usual synchronous cap; the app also chunks work at 8s so a 10s
+# plan still finishes a step and continues.
+[functions]
+  timeout = 26

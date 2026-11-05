@@ -53,6 +53,8 @@ Set **one** of:
 
 Then open **Sources → Willows Condos Records → Sync now**. Missing credentials fail gracefully and list the required env vars. Snapshots go to object storage; extractions facts/transactions stay `needs_review`.
 
+Sync runs in short steps. Transient Drive responses (including HTTP 502) are retried. If a step stops early, the source page continues the same run instead of leaving the browser on a Netlify 502. A service-account JSON value may store the private key with escaped newlines (`\n`); those are normalized before signing.
+
 ## Netlify
 
 The app lives in `web/`. Root `netlify.toml` sets `base = "web"`, `publish = ".next"`, and explicitly enables `@netlify/plugin-nextjs` (OpenNext adapter).

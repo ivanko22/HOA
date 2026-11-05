@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { getGoogleDriveCredentialsStatus } from "./credentials";
+import {
+  getGoogleDriveCredentialsStatus,
+  parseServiceAccountJson,
+} from "./credentials";
+import { GoogleDriveConfigError } from "./types";
 
 const keys = [
   "GOOGLE_DRIVE_API_KEY",
@@ -38,5 +42,26 @@ describe("getGoogleDriveCredentialsStatus", () => {
     const status = getGoogleDriveCredentialsStatus();
     expect(status.ok).toBe(true);
     expect(status.mode).toBe("api_key");
+  });
+});
+
+describe("parseServiceAccountJson", () => {
+  it("turns escaped newlines in the private key into real newlines", () => {
+    const parsed = parseServiceAccountJson(
+      JSON.stringify({
+        client_email: "sync@example.iam.gserviceaccount.com",
+        private_key: "-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n",
+        token_uri: "https://oauth2.googleapis.com/token",
+      }),
+    );
+    expect(parsed.client_email).toBe("sync@example.iam.gserviceaccount.com");
+    expect(parsed.private_key).toBe(
+      "-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n",
+    );
+    expect(parsed.token_uri).toBe("https://oauth2.googleapis.com/token");
+  });
+
+  it("rejects invalid JSON as a config error", () => {
+    expect(() => parseServiceAccountJson("{")).toThrow(GoogleDriveConfigError);
   });
 });
