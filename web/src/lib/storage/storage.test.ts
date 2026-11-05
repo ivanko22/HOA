@@ -1,9 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { NetlifyBlobsStorageProvider } from "./netlify-blobs-storage-provider";
 import type { DocumentBlobStore } from "./netlify-blobs-storage-provider";
-import { isFatalStorageError, storageKindFromEnv } from "./index";
+import { isFatalStorageError, isFunctionRuntime, storageKindFromEnv } from "./index";
 
 describe("storageKindFromEnv", () => {
+  it("uses Netlify Blobs on the Lambda filesystem even without NETLIFY=true", () => {
+    expect(
+      storageKindFromEnv({ STORAGE_PROVIDER: "local" }, "/var/task"),
+    ).toBe("netlify-blobs");
+    expect(
+      storageKindFromEnv(
+        { AWS_LAMBDA_FUNCTION_NAME: "___netlify-server-handler" },
+        "/tmp",
+      ),
+    ).toBe("netlify-blobs");
+    expect(isFunctionRuntime({ LAMBDA_TASK_ROOT: "/var/task" }, "/opt")).toBe(
+      true,
+    );
+  });
+
   it("uses Netlify Blobs on Netlify even when local is requested", () => {
     expect(storageKindFromEnv({ NETLIFY: "true" })).toBe("netlify-blobs");
     expect(
