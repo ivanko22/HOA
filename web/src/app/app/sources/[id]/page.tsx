@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { unstable_rethrow } from "next/navigation";
 import { requireTenantContext } from "@/lib/auth/config";
 import { can } from "@/lib/domain/permissions";
 import {
@@ -11,7 +12,30 @@ import { Badge } from "@/components/ui/badge";
 import { syncSourceAction } from "../actions";
 import { ContinueSync } from "../continue-sync";
 
-export default async function SourceDetailPage({
+const TREE_PREVIEW_LIMIT = 250;
+
+export default async function SourceDetailPage(props: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ run?: string; continue?: string; syncError?: string }>;
+}) {
+  try {
+    return await renderSourceDetail(props);
+  } catch (err) {
+    unstable_rethrow(err);
+    const message = err instanceof Error ? err.message : String(err);
+    return (
+      <div
+        className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-950"
+        role="alert"
+      >
+        <p className="font-semibold">This source page hit an error</p>
+        <p className="mt-1 break-words">{message}</p>
+      </div>
+    );
+  }
+}
+
+async function renderSourceDetail({
   params,
   searchParams,
 }: {
@@ -242,8 +266,12 @@ export default async function SourceDetailPage({
             <h3 className="font-medium">Folder / file tree</h3>
             <pre className="mt-2 max-h-64 overflow-auto bg-[var(--surface-hover)] p-3 text-xs">
               {report.tree
+                .slice(0, TREE_PREVIEW_LIMIT)
                 .map((n) => `${n.isFolder ? "📁" : "📄"} ${n.path}`)
                 .join("\n")}
+              {report.tree.length > TREE_PREVIEW_LIMIT
+                ? `\n… ${report.tree.length - TREE_PREVIEW_LIMIT} more`
+                : ""}
             </pre>
           </div>
 
@@ -295,6 +323,16 @@ export default async function SourceDetailPage({
                     className="px-3 py-6 text-center text-[var(--muted)]"
                   >
                     No files mirrored yet.
+                  </td>
+                </tr>
+              ) : null}
+              {files.length === 200 ? (
+                <tr>
+                  <td
+                    colSpan={4}
+                    className="px-3 py-2 text-xs text-[var(--muted)]"
+                  >
+                    Showing the first 200 mirrored files.
                   </td>
                 </tr>
               ) : null}

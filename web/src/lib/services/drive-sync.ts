@@ -113,8 +113,26 @@ const WILLOWS_FOLDER_ID = "1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y";
  * A full folder sync that runs longer is killed and the browser shows 502.
  */
 const SYNC_CHUNK_BUDGET_MS = 8_000;
-/** Leave room for one Drive download without crossing the function limit. */
-const DOWNLOAD_RESERVE_MS = 7_000;
+/**
+ * One file per chunk: download, store, then a few database writes.
+ * This reserve is the time those three steps need. Starting later in the
+ * chunk used to let the download finish and the store call run past the
+ * host limit, which the browser shows as "This page couldn't load".
+ */
+const DOWNLOAD_RESERVE_MS = 6_500;
+const STORE_TIMEOUT_MS = 2_500;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 function syncProgressSignature(report: SyncReport) {
   return [
@@ -241,7 +259,8 @@ export async function listSourceFiles(ctx: TenantContext, sourceId: string) {
     .select()
     .from(externalSourceFiles)
     .where(eq(externalSourceFiles.sourceId, sourceId))
-    .orderBy(externalSourceFiles.path);
+    .orderBy(externalSourceFiles.path)
+    .limit(200);
 }
 
 export async function getLatestSyncRun(ctx: TenantContext, sourceId: string) {
@@ -713,12 +732,16 @@ export async function syncExternalSource(
           name: node.name,
         });
         const contentHash = sha256(downloaded.bytes);
-        const stored = await getStorageProvider().putObject({
-          communityId: ctx.communityId,
-          originalFilename: downloaded.filename,
-          mimeType: downloaded.mimeType,
-          body: downloaded.bytes,
-        });
+        const stored = await withTimeout(
+          getStorageProvider().putObject({
+            communityId: ctx.communityId,
+            originalFilename: downloaded.filename,
+            mimeType: downloaded.mimeType,
+            body: downloaded.bytes,
+          }),
+          STORE_TIMEOUT_MS,
+          "Saving the file",
+        );
 
         let documentId = existing?.documentId ?? null;
         let changed = false;

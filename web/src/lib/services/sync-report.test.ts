@@ -19,4 +19,32 @@ describe("normalizeSyncReport", () => {
     expect(report?.missingYears).toEqual([]);
     expect(report?.categoryCounts).toEqual({});
   });
+
+  it("drops values that cannot be rendered", () => {
+    const report = normalizeSyncReport({
+      status: "failed",
+      totals: { discovered: "many", errors: 3 },
+      tree: [null, { path: "/Minutes/a.pdf", isFolder: false }, "nope"],
+      categoryCounts: { Minutes: 2, bad: { n: 1 } },
+      missingCredentials: "GOOGLE_DRIVE_API_KEY",
+      missingYears: [null, { year: 2025, status: "missing", note: "none" }],
+      discoveries: [{ text: "object" }, "2025 minutes found"],
+      fileErrors: [null, { path: "/a.pdf", error: "ENOENT" }],
+      matchedTargets: [{ key: "dues", label: "Dues", expected: 120, found: { n: 1 } }],
+    });
+    expect(report?.totals.discovered).toBe(0);
+    expect(report?.totals.errors).toBe(3);
+    expect(report?.tree).toEqual([
+      { id: "", name: "", path: "/Minutes/a.pdf", isFolder: false, mimeType: undefined },
+    ]);
+    expect(report?.categoryCounts).toEqual({ Minutes: 2 });
+    expect(report?.missingCredentials).toEqual([]);
+    expect(report?.missingYears).toEqual([
+      { year: 2025, status: "missing", note: "none" },
+    ]);
+    expect(report?.discoveries).toEqual(["2025 minutes found"]);
+    expect(report?.fileErrors).toEqual([{ path: "/a.pdf", error: "ENOENT" }]);
+    expect(report?.matchedTargets[0]?.expected).toBe("120");
+    expect(report?.matchedTargets[0]?.found).toBe("");
+  });
 });

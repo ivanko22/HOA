@@ -32,10 +32,11 @@ export function AppNav({ communityName }: { communityName: string }) {
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 p-2" aria-label="Primary">
         {links.map((link) => {
+          const path = pathname ?? "";
           const active =
             link.href === "/app"
-              ? pathname === "/app"
-              : pathname.startsWith(link.href);
+              ? path === "/app"
+              : path.startsWith(link.href);
           return (
             <Link
               key={link.href}
