@@ -52,6 +52,6 @@ export async function GET(
       },
     });
   } catch {
-    return NextResponse.json({ error: "File missing on disk" }, { status: 404 });
+    return NextResponse.json({ error: "Stored file is unavailable" }, { status: 404 });
   }
 }

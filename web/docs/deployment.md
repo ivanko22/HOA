@@ -23,7 +23,7 @@ See `.env.example` for the full list. Minimum for a deploy:
 - `DATABASE_URL`
 - `AUTH_SECRET`
 - `AUTH_URL`
-- `STORAGE_PROVIDER` (`s3` for staging/production)
+- `STORAGE_PROVIDER` (`local` for developer machines; Netlify uses Blobs automatically)
 - S3 variables when using object storage
 
 ## Migrations
@@ -67,6 +67,6 @@ In the Netlify UI, set at least:
 - `DATABASE_URL`
 - `AUTH_SECRET`
 - `AUTH_URL=https://<your-site>.netlify.app` (or custom domain)
-- `STORAGE_PROVIDER=s3` plus S3 credentials for real uploads
+- Leave `STORAGE_PROVIDER` unset, or set `netlify-blobs`. Do not rely on local disk: the function cannot create `/var/task/storage`. `s3` is not implemented.
 
 After env vars are set, trigger a clear cache and redeploy. `/` should redirect to `/login` or `/app`, not Netlify’s static “Page not found”.
