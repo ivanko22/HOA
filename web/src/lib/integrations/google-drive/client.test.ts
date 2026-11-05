@@ -1,0 +1,67 @@
+import { describe, expect, it } from "vitest";
+import { driveRetryDelayMs, withDriveRetries } from "./client";
+
+describe("withDriveRetries", () => {
+  it("retries a Drive 502 and returns the later success", async () => {
+    const seen: number[] = [];
+    const res = await withDriveRetries(
+      async () => {
+        seen.push(seen.length);
+        if (seen.length < 3) {
+          return new Response("bad gateway", { status: 502 });
+        }
+        return new Response("ok", { status: 200 });
+      },
+      { sleep: async () => {}, random: () => 0 },
+    );
+    expect(res.status).toBe(200);
+    expect(seen).toEqual([0, 1, 2]);
+  });
+
+  it("does not retry a 400", async () => {
+    let calls = 0;
+    const res = await withDriveRetries(
+      async () => {
+        calls += 1;
+        return new Response("bad request", { status: 400 });
+      },
+      { sleep: async () => {}, random: () => 0 },
+    );
+    expect(res.status).toBe(400);
+    expect(calls).toBe(1);
+  });
+
+  it("honors Retry-After on 503", async () => {
+    const delays: number[] = [];
+    const res = await withDriveRetries(
+      async () => {
+        if (delays.length === 0) {
+          return new Response("unavailable", {
+            status: 503,
+            headers: { "retry-after": "1" },
+          });
+        }
+        return new Response("ok", { status: 200 });
+      },
+      {
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+        random: () => 0,
+      },
+    );
+    expect(res.status).toBe(200);
+    expect(delays).toEqual([1000]);
+  });
+});
+
+describe("driveRetryDelayMs", () => {
+  it("caps a long Retry-After", () => {
+    const delay = driveRetryDelayMs(
+      0,
+      new Response("", { status: 429, headers: { "retry-after": "120" } }),
+      () => 0,
+    );
+    expect(delay).toBe(2_000);
+  });
+});

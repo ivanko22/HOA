@@ -24,7 +24,8 @@ import {
 } from "@/lib/domain/permissions";
 import {
   downloadDriveFile,
-  listDriveTree,
+  FOLDER_MIME,
+  listDriveChildren,
 } from "@/lib/integrations/google-drive/client";
 import { getGoogleDriveCredentialsStatus } from "@/lib/integrations/google-drive/credentials";
 import { GoogleDriveConfigError } from "@/lib/integrations/google-drive/types";
@@ -39,7 +40,19 @@ export type SyncReport = {
   finishedAt: string;
   status: string;
   missingCredentials: string[];
-  tree: { id: string; name: string; path: string; isFolder: boolean; mimeType?: string }[];
+  tree: {
+    id: string;
+    name: string;
+    path: string;
+    isFolder: boolean;
+    mimeType?: string;
+    parents?: string[];
+    modifiedTime?: string;
+    size?: string;
+    md5Checksum?: string;
+    version?: string;
+    webViewLink?: string;
+  }[];
   totals: {
     discovered: number;
     folders: number;
@@ -86,9 +99,107 @@ export type SyncReport = {
     reason: string;
   }[];
   fileErrors: { path: string; error: string }[];
+  /** listing → files → finalize. Absent on runs saved before chunked sync. */
+  phase?: "listing" | "files" | "finalize" | "done";
+  pendingFolders?: { id: string; path: string }[];
+  /** Next `tree` index to snapshot. */
+  resumeFrom?: number;
 };
 
 const WILLOWS_FOLDER_ID = "1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y";
+
+/**
+ * Stay under Netlify's synchronous function limit (10s on the free tier).
+ * A full folder sync that runs longer is killed and the browser shows 502.
+ */
+const SYNC_CHUNK_BUDGET_MS = 8_000;
+
+function syncProgressSignature(report: SyncReport) {
+  return [
+    report.phase ?? "",
+    report.pendingFolders?.length ?? 0,
+    report.resumeFrom ?? 0,
+    report.tree.length,
+  ].join(":");
+}
+
+function initialSyncReport(
+  sourceName: string,
+  folderId: string,
+  folderUrl: string | undefined,
+  rootName: string,
+): SyncReport {
+  return {
+    sourceName,
+    folderId,
+    folderUrl,
+    startedAt: new Date().toISOString(),
+    finishedAt: "",
+    status: "running",
+    missingCredentials: [],
+    phase: "listing",
+    pendingFolders: [{ id: folderId, path: `/${rootName}` }],
+    resumeFrom: 0,
+    tree: [
+      {
+        id: folderId,
+        name: rootName,
+        path: `/${rootName}`,
+        isFolder: true,
+        mimeType: FOLDER_MIME,
+      },
+    ],
+    totals: {
+      discovered: 1,
+      folders: 1,
+      files: 0,
+      snapshotted: 0,
+      skipped: 0,
+      unchanged: 0,
+      changed: 0,
+      errors: 0,
+      parsingFailures: 0,
+      candidateFacts: 0,
+      candidateTransactions: 0,
+      candidateMaintenanceCapital: 0,
+      conflicts: 0,
+    },
+    categoryCounts: {},
+    minutesYearsFound: [],
+    missingYears: [],
+    discoveries: [],
+    matchedTargets: [],
+    differingTargets: [],
+    conflicts: [],
+    needsManualReview: [],
+    fileErrors: [],
+  };
+}
+
+function hydrateSyncReport(
+  stored: SyncReport | null | undefined,
+  initial: SyncReport,
+): SyncReport {
+  if (!stored?.phase) return initial;
+  return {
+    ...initial,
+    ...stored,
+    tree: stored.tree ?? initial.tree,
+    pendingFolders: stored.pendingFolders ?? [],
+    resumeFrom: stored.resumeFrom ?? 0,
+    totals: { ...initial.totals, ...stored.totals },
+    categoryCounts: stored.categoryCounts ?? {},
+    fileErrors: stored.fileErrors ?? [],
+    needsManualReview: stored.needsManualReview ?? [],
+    discoveries: stored.discoveries ?? [],
+    matchedTargets: stored.matchedTargets ?? [],
+    differingTargets: stored.differingTargets ?? [],
+    conflicts: stored.conflicts ?? [],
+    missingYears: stored.missingYears ?? [],
+    minutesYearsFound: stored.minutesYearsFound ?? [],
+    missingCredentials: stored.missingCredentials ?? [],
+  };
+}
 
 export async function listExternalSources(ctx: TenantContext) {
   assertCan(ctx.capabilities, "documents.read");
@@ -358,57 +469,59 @@ async function compareValidationTargets(
 export async function syncExternalSource(
   ctx: TenantContext,
   sourceId: string,
+  opts?: { resumeRunId?: string },
 ): Promise<{ runId: string; report: SyncReport }> {
   assertCan(ctx.capabilities, "documents.manage");
   const source = await getExternalSource(ctx, sourceId);
   const folderId = source.config?.folderId;
   if (!folderId) throw new Error("External source is missing folderId in config");
 
-  const [run] = await db
-    .insert(externalSyncRuns)
-    .values({
-      organizationId: ctx.organizationId,
-      communityId: ctx.communityId,
-      sourceId: source.id,
-      status: "running",
-      startedBy: ctx.userId,
-    })
-    .returning();
-
-  const report: SyncReport = {
-    sourceName: source.name,
+  const rootName = source.config?.folderName ?? source.name;
+  const initial = initialSyncReport(
+    source.name,
     folderId,
-    folderUrl: source.config?.folderUrl,
-    startedAt: new Date().toISOString(),
-    finishedAt: "",
-    status: "running",
-    missingCredentials: [],
-    tree: [],
-    totals: {
-      discovered: 0,
-      folders: 0,
-      files: 0,
-      snapshotted: 0,
-      skipped: 0,
-      unchanged: 0,
-      changed: 0,
-      errors: 0,
-      parsingFailures: 0,
-      candidateFacts: 0,
-      candidateTransactions: 0,
-      candidateMaintenanceCapital: 0,
-      conflicts: 0,
-    },
-    categoryCounts: {},
-    minutesYearsFound: [],
-    missingYears: [],
-    discoveries: [],
-    matchedTargets: [],
-    differingTargets: [],
-    conflicts: [],
-    needsManualReview: [],
-    fileErrors: [],
-  };
+    source.config?.folderUrl,
+    rootName,
+  );
+
+  let run: { id: string };
+  let report: SyncReport;
+  if (opts?.resumeRunId) {
+    const [existing] = await db
+      .select()
+      .from(externalSyncRuns)
+      .where(
+        and(
+          eq(externalSyncRuns.id, opts.resumeRunId),
+          eq(externalSyncRuns.sourceId, source.id),
+          eq(externalSyncRuns.communityId, ctx.communityId),
+        ),
+      )
+      .limit(1);
+    if (!existing) throw new Error("Sync run not found");
+    if (existing.status !== "running") {
+      return {
+        runId: existing.id,
+        report: hydrateSyncReport(existing.report as SyncReport | null, initial),
+      };
+    }
+    run = existing;
+    report = hydrateSyncReport(existing.report as SyncReport | null, initial);
+  } else {
+    const [created] = await db
+      .insert(externalSyncRuns)
+      .values({
+        organizationId: ctx.organizationId,
+        communityId: ctx.communityId,
+        sourceId: source.id,
+        status: "running",
+        startedBy: ctx.userId,
+        report: initial,
+      })
+      .returning();
+    run = created;
+    report = initial;
+  }
 
   const creds = getGoogleDriveCredentialsStatus();
   if (!creds.ok) {
@@ -437,25 +550,59 @@ export async function syncExternalSource(
     return { runId: run.id, report };
   }
 
+  const deadline = Date.now() + SYNC_CHUNK_BUDGET_MS;
+  let yielded = false;
+  const progressBefore = syncProgressSignature(report);
+
   try {
-    const tree = await listDriveTree(
-      folderId,
-      source.config?.folderName ?? source.name,
-    );
-    report.tree = tree.map((n) => ({
-      id: n.id,
-      name: n.name,
-      path: n.path,
-      isFolder: n.isFolder,
-      mimeType: n.mimeType,
-    }));
-    report.totals.discovered = tree.length;
-    report.totals.folders = tree.filter((n) => n.isFolder).length;
-    report.totals.files = tree.filter((n) => !n.isFolder).length;
+    if ((report.phase ?? "listing") === "listing") {
+      report.pendingFolders ??= [];
+      while (report.pendingFolders.length > 0) {
+        if (report.tree.length > 1 && Date.now() >= deadline) {
+          yielded = true;
+          break;
+        }
+        const folder = report.pendingFolders.shift()!;
+        const children = await listDriveChildren(folder.id);
+        for (const child of children) {
+          const isFolder = child.mimeType === FOLDER_MIME;
+          const path = `${folder.path}/${child.name}`.replace(/\/+/g, "/");
+          report.tree.push({
+            id: child.id,
+            name: child.name,
+            path,
+            isFolder,
+            mimeType: child.mimeType,
+            parents: child.parents,
+            modifiedTime: child.modifiedTime,
+            size: child.size,
+            md5Checksum: child.md5Checksum,
+            version: child.version,
+            webViewLink: child.webViewLink,
+          });
+          if (isFolder) report.pendingFolders.push({ id: child.id, path });
+        }
+      }
+      report.totals.discovered = report.tree.length;
+      report.totals.folders = report.tree.filter((n) => n.isFolder).length;
+      report.totals.files = report.tree.filter((n) => !n.isFolder).length;
+      if (!yielded) report.phase = "files";
+    }
 
-    const minutesYears = new Set<number>();
-
-    for (const node of tree) {
+    if (!yielded && report.phase === "files") {
+      const start = report.resumeFrom ?? 0;
+      for (
+        let fileIndex = start;
+        fileIndex < report.tree.length;
+        fileIndex++
+      ) {
+        if (fileIndex > start && Date.now() >= deadline) {
+          report.resumeFrom = fileIndex;
+          yielded = true;
+          break;
+        }
+        const node = report.tree[fileIndex];
+        report.resumeFrom = fileIndex + 1;
       if (node.isFolder) {
         // Upsert folder rows for tree fidelity, no download.
         const existingFolder = await db
@@ -511,12 +658,6 @@ export async function syncExternalSource(
       report.categoryCounts[classification.label] =
         (report.categoryCounts[classification.label] ?? 0) + 1;
 
-      if (classification.label === "Meeting Minutes") {
-        for (const y of extractYears(`${node.path} ${node.name}`)) {
-          minutesYears.add(y);
-        }
-      }
-
       const [existing] = await db
         .select()
         .from(externalSourceFiles)
@@ -559,7 +700,7 @@ export async function syncExternalSource(
       try {
         const downloaded = await downloadDriveFile({
           id: node.id,
-          mimeType: node.mimeType,
+          mimeType: node.mimeType || "application/octet-stream",
           name: node.name,
         });
         const contentHash = sha256(downloaded.bytes);
@@ -813,6 +954,55 @@ export async function syncExternalSource(
         }
       }
     }
+    if (!yielded) {
+      report.resumeFrom = report.tree.length;
+      report.phase = "finalize";
+    }
+  }
+
+    if (yielded) {
+      if (syncProgressSignature(report) === progressBefore) {
+        throw new Error(
+          "Drive sync made no progress in this step. Try again.",
+        );
+      }
+      report.status = "running";
+      report.finishedAt = "";
+      await db
+        .update(externalSyncRuns)
+        .set({
+          status: "running",
+          report,
+          errorMessage: null,
+        })
+        .where(eq(externalSyncRuns.id, run.id));
+      await db
+        .update(externalSources)
+        .set({
+          lastSyncAt: new Date(),
+          lastSyncStatus: "running",
+          lastError: null,
+          status: "active",
+          updatedAt: new Date(),
+        })
+        .where(eq(externalSources.id, source.id));
+      return { runId: run.id, report };
+    }
+
+    const minutesYears = new Set<number>();
+    for (const node of report.tree) {
+      if (node.isFolder) continue;
+      const classification = classifyDriveDocument({
+        name: node.name,
+        path: node.path,
+        mimeType: node.mimeType,
+      });
+      if (classification.label === "Meeting Minutes") {
+        for (const y of extractYears(`${node.path} ${node.name}`)) {
+          minutesYears.add(y);
+        }
+      }
+    }
 
     report.minutesYearsFound = [...minutesYears].sort();
     for (const year of [2024, 2025, 2026]) {
@@ -845,6 +1035,7 @@ export async function syncExternalSource(
     await compareValidationTargets(ctx, report);
 
     report.status = "completed";
+    report.phase = "done";
     report.finishedAt = new Date().toISOString();
 
     await db
@@ -913,7 +1104,7 @@ export async function syncExternalSource(
         updatedAt: new Date(),
       })
       .where(eq(externalSources.id, source.id));
-    throw err;
+    return { runId: run.id, report };
   }
 }
 
