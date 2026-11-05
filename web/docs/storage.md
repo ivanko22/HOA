@@ -28,9 +28,9 @@ On `documents` (and future `import_batches`):
 - Root: `DOCUMENT_STORAGE_ROOT` (default `./storage/documents`)
 - Suitable for local development only
 - `getSignedUrl` returns `null` — always use the authenticated route
-- Not used on Netlify. The function directory is read-only, so `mkdir /var/task/storage` fails.
+- Not used when the process is a Netlify/Lambda function (`/var/task`), even if `NETLIFY` is unset. That filesystem cannot create `storage`.
 
-### `NetlifyBlobsStorageProvider` (automatic when `NETLIFY=true`)
+### `NetlifyBlobsStorageProvider` (automatic on Netlify)
 
 - Store name: `documents`
 - Used for Sync now and document uploads on the Netlify site
