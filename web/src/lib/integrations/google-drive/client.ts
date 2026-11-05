@@ -249,7 +249,8 @@ export async function listDriveTree(
   return flat;
 }
 
-const FILE_DOWNLOAD_TIMEOUT_MS = 6_000;
+/** Leave time in the same chunk to store the bytes after the download returns. */
+const FILE_DOWNLOAD_TIMEOUT_MS = 3_500;
 
 async function fetchDriveFile(
   path: string,

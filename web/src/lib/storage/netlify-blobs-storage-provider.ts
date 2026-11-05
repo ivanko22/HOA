@@ -8,6 +8,7 @@ import type {
 } from "./types";
 
 const STORE_NAME = "documents";
+const STORE_FETCH_TIMEOUT_MS = 2_500;
 
 export type DocumentBlobStore = {
   set: (
@@ -22,7 +23,15 @@ export type DocumentBlobStore = {
 };
 
 export function defaultDocumentStore(): DocumentBlobStore {
-  return getStore({ name: STORE_NAME, consistency: "strong" });
+  return getStore({
+    name: STORE_NAME,
+    consistency: "strong",
+    fetch: (input, init) =>
+      fetch(input, {
+        ...init,
+        signal: AbortSignal.timeout(STORE_FETCH_TIMEOUT_MS),
+      }),
+  });
 }
 
 /**
