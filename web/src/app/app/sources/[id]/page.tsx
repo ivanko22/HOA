@@ -6,7 +6,7 @@ import {
   getLatestSyncRun,
   listSourceFiles,
 } from "@/lib/services/drive-sync";
-import type { SyncReport } from "@/lib/services/drive-sync";
+import { normalizeSyncReport } from "@/lib/services/sync-report";
 import { Badge } from "@/components/ui/badge";
 import { syncSourceAction } from "../actions";
 import { ContinueSync } from "../continue-sync";
@@ -25,7 +25,7 @@ export default async function SourceDetailPage({
   const source = await getExternalSource(ctx, id);
   const files = await listSourceFiles(ctx, id);
   const latest = await getLatestSyncRun(ctx, id);
-  const report = (latest?.report ?? null) as SyncReport | null;
+  const report = normalizeSyncReport(latest?.report);
   const canSync = can(ctx.capabilities, "documents.manage");
 
   return (
@@ -80,10 +80,11 @@ export default async function SourceDetailPage({
         <div className="border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-950">
           <p className="font-semibold">Sync in progress</p>
           <p className="mt-1">
-            {report?.phase === "listing"
-              ? "Listing the Drive folder."
-              : "Saving files from Drive."}{" "}
-            Each step stays short so the host does not return a 502.
+            {report == null
+              ? "This run stopped before a report was saved. Continue sync to list the Drive folder."
+              : report.phase === "listing"
+                ? "Listing the Drive folder. Each step stays short so the host does not return a 502."
+                : "Saving files from Drive. Each step stays short so the host does not return a 502."}
           </p>
           {autoContinue ? (
             <ContinueSync
@@ -287,6 +288,16 @@ export default async function SourceDetailPage({
               </tr>
             </thead>
             <tbody>
+              {files.filter((f) => !f.isFolder).length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={4}
+                    className="px-3 py-6 text-center text-[var(--muted)]"
+                  >
+                    No files mirrored yet.
+                  </td>
+                </tr>
+              ) : null}
               {files
                 .filter((f) => !f.isFolder)
                 .map((f) => (
