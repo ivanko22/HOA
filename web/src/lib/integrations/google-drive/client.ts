@@ -249,8 +249,60 @@ export async function listDriveTree(
   return flat;
 }
 
-/** Leave time in the same chunk to store the bytes after the download returns. */
 const FILE_DOWNLOAD_TIMEOUT_MS = 3_500;
+/** Keep the function from buffering a recording or other large Drive file into memory. */
+export const MAX_SYNC_FILE_BYTES = 12 * 1024 * 1024;
+
+export async function readCappedBody(
+  res: Response,
+  maxBytes: number,
+  label: string,
+): Promise<Buffer> {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error(
+      `${label} is ${Math.ceil(declared / (1024 * 1024))} MB, over the ${Math.floor(maxBytes / (1024 * 1024))} MB sync limit. Open it on Drive.`,
+    );
+  }
+  if (!res.body) {
+    const buffered = Buffer.from(await res.arrayBuffer());
+    if (buffered.byteLength > maxBytes) {
+      throw new Error(
+        `${label} is over the ${Math.floor(maxBytes / (1024 * 1024))} MB sync limit. Open it on Drive.`,
+      );
+    }
+    return buffered;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(
+          `${label} is over the ${Math.floor(maxBytes / (1024 * 1024))} MB sync limit. Open it on Drive.`,
+        );
+      }
+      chunks.push(value);
+    }
+  } catch (err) {
+    await reader.cancel().catch(() => undefined);
+    throw err;
+  }
+  const out = Buffer.allocUnsafe(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
 
 async function fetchDriveFile(
   path: string,
@@ -308,10 +360,10 @@ export async function downloadDriveFile(file: {
       file.name,
       "export",
     );
-    const ab = await res.arrayBuffer();
+    const bytes = await readCappedBody(res, MAX_SYNC_FILE_BYTES, file.name);
     const base = file.name.replace(/\.[^.]+$/, "");
     return {
-      bytes: Buffer.from(ab),
+      bytes,
       mimeType: mapped.mime,
       filename: `${base}.${mapped.ext}`,
     };
@@ -322,9 +374,9 @@ export async function downloadDriveFile(file: {
     file.name,
     "download",
   );
-  const ab = await res.arrayBuffer();
+  const bytes = await readCappedBody(res, MAX_SYNC_FILE_BYTES, file.name);
   return {
-    bytes: Buffer.from(ab),
+    bytes,
     mimeType: file.mimeType || "application/octet-stream",
     filename: file.name,
   };

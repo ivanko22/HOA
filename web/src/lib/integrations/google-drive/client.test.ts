@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { driveRetryDelayMs, isDriveTimeout, withDriveRetries } from "./client";
+import { driveRetryDelayMs, isDriveTimeout, readCappedBody, withDriveRetries } from "./client";
 
 describe("withDriveRetries", () => {
   it("retries a Drive 502 and returns the later success", async () => {
@@ -68,6 +68,27 @@ describe("withDriveRetries", () => {
     );
     expect(res.status).toBe(200);
     expect(delays).toEqual([1000]);
+  });
+});
+
+describe("readCappedBody", () => {
+  it("returns a small body and refuses one over the cap", async () => {
+    const small = await readCappedBody(
+      new Response(new Uint8Array([1, 2, 3])),
+      4,
+      "note.pdf",
+    );
+    expect(Buffer.from(small)).toEqual(Buffer.from([1, 2, 3]));
+
+    await expect(
+      readCappedBody(
+        new Response(new Uint8Array(8), {
+          headers: { "content-length": "8" },
+        }),
+        4,
+        "meeting.m4a",
+      ),
+    ).rejects.toThrow(/sync limit/);
   });
 });
 
