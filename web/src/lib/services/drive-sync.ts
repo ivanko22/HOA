@@ -16,8 +16,17 @@ import {
   classifyDriveDocument,
   extractCandidatesFromText,
   extractYears,
+  isSameFinancialMetric,
+  reviewStatusForExtractedFact,
+  uniqueFinancialMetrics,
   type ExtractedCandidate,
 } from "@/lib/domain/drive-classify";
+import { textForExtraction } from "@/lib/domain/extract-text";
+import {
+  classifySyncFile,
+  driveWebViewLink,
+  type SyncSkipStatus,
+} from "@/lib/domain/sync-file";
 import {
   assertCan,
   type TenantContext,
@@ -68,6 +77,17 @@ export type SyncReport = {
     candidateTransactions: number;
     candidateMaintenanceCapital: number;
     conflicts: number;
+    /** Bytes stored in this run. */
+    downloaded: number;
+    unsupported: number;
+    oversized: number;
+    /** Real synchronization failures. Unsupported and oversized files are not failures. */
+    failed: number;
+    parsed: number;
+    factsExtracted: number;
+    /** Extracted facts left at needs_review or conflicting. Never verified by sync. */
+    factsNeedingReview: number;
+    pendingTranscription: number;
   };
   categoryCounts: Record<string, number>;
   minutesYearsFound: number[];
@@ -99,10 +119,30 @@ export type SyncReport = {
     filename: string;
     reason: string;
   }[];
-  fileErrors: { path: string; error: string }[];
+  fileErrors: {
+    path: string;
+    error: string;
+    /** failed is a real sync error. The other values explain a deliberate skip. */
+    status?: "failed" | SyncSkipStatus;
+    driveFileId?: string;
+    webViewLink?: string;
+    documentId?: string;
+  }[];
   /** listing → files → finalize. Absent on runs saved before chunked sync. */
   phase?: "listing" | "files" | "finalize" | "done";
   pendingFolders?: { id: string; path: string }[];
+  /**
+   * Stored documents that still have no facts. Drained one at a time so a
+   * reread does not download the file again or blow the function time limit.
+   */
+  pendingFactDocs?: {
+    documentId: string;
+    filename: string;
+    path: string;
+    category: string;
+    webViewLink?: string;
+    driveFileId?: string;
+  }[];
   /** Next `tree` index to snapshot. */
   resumeFrom?: number;
 };
@@ -140,6 +180,7 @@ function syncProgressSignature(report: SyncReport) {
   return [
     report.phase ?? "",
     report.pendingFolders?.length ?? 0,
+    report.pendingFactDocs?.length ?? 0,
     report.resumeFrom ?? 0,
     report.tree.length,
   ].join(":");
@@ -185,6 +226,14 @@ function initialSyncReport(
       candidateTransactions: 0,
       candidateMaintenanceCapital: 0,
       conflicts: 0,
+      downloaded: 0,
+      unsupported: 0,
+      oversized: 0,
+      failed: 0,
+      parsed: 0,
+      factsExtracted: 0,
+      factsNeedingReview: 0,
+      pendingTranscription: 0,
     },
     categoryCounts: {},
     minutesYearsFound: [],
@@ -195,6 +244,7 @@ function initialSyncReport(
     conflicts: [],
     needsManualReview: [],
     fileErrors: [],
+    pendingFactDocs: [],
   };
 }
 
@@ -212,6 +262,7 @@ function hydrateSyncReport(
     totals: { ...initial.totals, ...stored.totals },
     categoryCounts: stored.categoryCounts ?? {},
     fileErrors: stored.fileErrors ?? [],
+    pendingFactDocs: stored.pendingFactDocs ?? [],
     needsManualReview: stored.needsManualReview ?? [],
     discoveries: stored.discoveries ?? [],
     matchedTargets: stored.matchedTargets ?? [],
@@ -374,27 +425,8 @@ async function nextDocumentVersion(documentId: string) {
   return Number(row?.max ?? 0) + 1;
 }
 
-function textFromBytes(bytes: Buffer, mimeType: string): string {
-  if (
-    mimeType.startsWith("audio/") ||
-    mimeType.startsWith("video/") ||
-    mimeType.startsWith("image/")
-  ) {
-    return "";
-  }
-  const sample = bytes.subarray(0, 512_000);
-  if (
-    mimeType.startsWith("text/") ||
-    mimeType === "application/json" ||
-    mimeType === "text/csv" ||
-    mimeType.includes("csv")
-  ) {
-    return sample.toString("utf8").slice(0, 500_000);
-  }
-  const printable = sample
-    .toString("latin1")
-    .replace(/[^\x09\x0a\x0d\x20-\x7e]/g, " ");
-  return printable.slice(0, 200_000);
+function textFromBytes(bytes: Buffer, mimeType: string, filename = ""): string {
+  return textForExtraction(bytes, mimeType, filename);
 }
 
 /** Save progress before a download so a killed function does not retry that file. */
@@ -408,15 +440,76 @@ async function checkpointReport(runId: string, report: SyncReport) {
     .where(eq(externalSyncRuns.id, runId));
 }
 
+function sameStoredMetric(
+  row: {
+    factType: string;
+    label: string;
+    numericValue: string | null;
+    periodStart: string | null;
+    periodEnd: string | null;
+  },
+  candidate: ExtractedCandidate,
+): boolean {
+  return isSameFinancialMetric(
+    {
+      kind: candidate.kind,
+      factType: row.factType,
+      label: row.label,
+      numericValue: row.numericValue,
+      periodStart: row.periodStart,
+      periodEnd: row.periodEnd,
+    },
+    candidate,
+  );
+}
+
+function sameTransaction(parsed: unknown, candidate: ExtractedCandidate): boolean {
+  if (!parsed || typeof parsed !== "object") return false;
+  const row = parsed as Partial<ExtractedCandidate>;
+  return (
+    row.kind === "transaction" &&
+    row.label === candidate.label &&
+    row.numericValue === candidate.numericValue &&
+    row.asOfDate === candidate.asOfDate
+  );
+}
+
 async function persistCandidates(params: {
   ctx: TenantContext;
   documentId: string;
   candidates: ExtractedCandidate[];
   report: SyncReport;
 }) {
-  const { ctx, documentId, candidates, report } = params;
+  const { ctx, documentId, report } = params;
+  const candidates = uniqueFinancialMetrics(params.candidates);
+  const existingFacts = await db
+    .select({
+      factType: facts.factType,
+      label: facts.label,
+      numericValue: facts.numericValue,
+      periodStart: facts.periodStart,
+      periodEnd: facts.periodEnd,
+    })
+    .from(facts)
+    .where(
+      and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
+    );
+  const known = [...existingFacts];
+  const existingTransactions = await db
+    .select({ parsedValue: documentExtractions.parsedValue })
+    .from(documentExtractions)
+    .where(
+      and(
+        eq(documentExtractions.communityId, ctx.communityId),
+        eq(documentExtractions.documentId, documentId),
+        eq(documentExtractions.fieldPath, "transaction_candidate"),
+      ),
+    );
+
   for (const c of candidates) {
     if (c.kind === "fact" || c.kind === "maintenance_capital") {
+      if (known.some((row) => sameStoredMetric(row, c))) continue;
+
       report.totals.candidateFacts += c.kind === "fact" ? 1 : 0;
       report.totals.candidateMaintenanceCapital +=
         c.kind === "maintenance_capital" ? 1 : 0;
@@ -428,12 +521,10 @@ async function persistCandidates(params: {
         fieldPath: c.factType ?? c.label,
         rawValue: c.rawValue ?? c.numericValue ?? null,
         parsedValue: c,
-        verificationStatus: "needs_review",
+        verificationStatus: reviewStatusForExtractedFact(),
       });
 
-      // Also create a needs_review fact so it appears in fact/reconciliation UIs.
       if (c.numericValue != null || c.kind === "maintenance_capital") {
-        // Conflict check against existing verified/reported facts of same type
         const existing = await db
           .select()
           .from(facts)
@@ -445,7 +536,7 @@ async function persistCandidates(params: {
             ),
           );
 
-        let status: "needs_review" | "conflicting" = "needs_review";
+        let status: "needs_review" | "conflicting" = reviewStatusForExtractedFact();
         for (const ex of existing) {
           if (
             ex.numericValue != null &&
@@ -462,14 +553,15 @@ async function persistCandidates(params: {
               candidateValue: c.numericValue,
               documentId,
             });
-            // Flag the existing fact as conflicting too (retain both).
             await db
               .update(facts)
               .set({
                 verificationStatus: "conflicting",
                 updatedAt: new Date(),
               })
-              .where(eq(facts.id, ex.id));
+              .where(
+                and(eq(facts.id, ex.id), eq(facts.communityId, ctx.communityId)),
+              );
           }
         }
 
@@ -484,14 +576,28 @@ async function persistCandidates(params: {
           periodStart: c.periodStart ?? null,
           periodEnd: c.periodEnd ?? null,
           asOfDate: c.asOfDate ?? null,
+          sourcePage: c.sourcePage ?? null,
           sourceExcerpt: c.sourceExcerpt ?? null,
           sourceReference: "google_drive_sync",
           verificationStatus: status,
+          confidence: c.confidence ?? null,
           notes: "Auto-extracted from Drive sync — needs review",
           createdBy: ctx.userId,
         });
+        report.totals.factsExtracted += 1;
+        report.totals.factsNeedingReview += 1;
+        known.push({
+          factType: c.factType ?? "other",
+          label: c.label,
+          numericValue: c.numericValue ?? null,
+          periodStart: c.periodStart ?? null,
+          periodEnd: c.periodEnd ?? null,
+        });
       }
     } else if (c.kind === "transaction") {
+      if (existingTransactions.some((row) => sameTransaction(row.parsedValue, c))) {
+        continue;
+      }
       report.totals.candidateTransactions += 1;
       await db.insert(documentExtractions).values({
         organizationId: ctx.organizationId,
@@ -500,9 +606,8 @@ async function persistCandidates(params: {
         fieldPath: "transaction_candidate",
         rawValue: c.rawValue ?? null,
         parsedValue: c,
-        verificationStatus: "needs_review",
+        verificationStatus: reviewStatusForExtractedFact(),
       });
-      // Do not auto-post financial_transactions — keep as extraction only until reviewed.
     }
   }
 }
@@ -551,6 +656,206 @@ async function compareValidationTargets(
           : "Expected validation target not found in extracted candidates",
       });
     }
+  }
+}
+
+const FACT_CATEGORIES = new Set([
+  "financial_statement",
+  "meeting_minutes",
+  "bank_statement",
+]);
+const EXTRACTION_MARKER = "drive-text-v2";
+
+function noteDiscovery(report: SyncReport, message: string) {
+  if (!report.discoveries.includes(message)) report.discoveries.push(message);
+}
+
+function queueFactDoc(
+  report: SyncReport,
+  item: NonNullable<SyncReport["pendingFactDocs"]>[number],
+) {
+  report.pendingFactDocs ??= [];
+  if (report.pendingFactDocs.some((row) => row.documentId === item.documentId)) {
+    return;
+  }
+  if (report.pendingFactDocs.length >= 80) return;
+  if (item.category === "financial_statement" || item.category === "bank_statement") {
+    const firstMinutes = report.pendingFactDocs.findIndex(
+      (row) => row.category === "meeting_minutes",
+    );
+    if (firstMinutes >= 0) report.pendingFactDocs.splice(firstMinutes, 0, item);
+    else report.pendingFactDocs.push(item);
+  } else {
+    report.pendingFactDocs.push(item);
+  }
+}
+
+async function alreadyExtracted(
+  ctx: TenantContext,
+  documentId: string,
+): Promise<boolean> {
+  const [factRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(facts)
+    .where(
+      and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
+    );
+  if (Number(factRow?.n ?? 0) > 0) return true;
+  const [marker] = await db
+    .select({ id: documentExtractions.id })
+    .from(documentExtractions)
+    .where(
+      and(
+        eq(documentExtractions.communityId, ctx.communityId),
+        eq(documentExtractions.documentId, documentId),
+        eq(documentExtractions.fieldPath, "extraction_attempt"),
+        eq(documentExtractions.rawValue, EXTRACTION_MARKER),
+      ),
+    )
+    .limit(1);
+  return Boolean(marker);
+}
+
+async function markExtractionAttempt(ctx: TenantContext, documentId: string) {
+  if (await alreadyExtracted(ctx, documentId)) return;
+  await db.insert(documentExtractions).values({
+    organizationId: ctx.organizationId,
+    communityId: ctx.communityId,
+    documentId,
+    fieldPath: "extraction_attempt",
+    rawValue: EXTRACTION_MARKER,
+    parsedValue: { version: EXTRACTION_MARKER },
+    verificationStatus: reviewStatusForExtractedFact(),
+  });
+}
+
+async function saveSourceFileStatus(params: {
+  ctx: TenantContext;
+  sourceId: string;
+  runId: string;
+  node: SyncReport["tree"][number];
+  existingId?: string;
+  status: SyncSkipStatus | "error";
+  message: string;
+  classification: ReturnType<typeof classifyDriveDocument>;
+  documentId?: string | null;
+}) {
+  const link = driveWebViewLink(params.node.id, params.node.webViewLink);
+  const size = Number(params.node.size ?? "");
+  const sizeBytes =
+    Number.isFinite(size) && size > 0 && size < 2_000_000_000
+      ? Math.round(size)
+      : null;
+  const patch = {
+    name: params.node.name,
+    path: params.node.path,
+    mimeType: params.node.mimeType,
+    modifiedTime: params.node.modifiedTime
+      ? new Date(params.node.modifiedTime)
+      : null,
+    sizeBytes,
+    md5Checksum: params.node.md5Checksum ?? null,
+    version: params.node.version ?? null,
+    webViewLink: link,
+    classificationLabel: params.classification.label,
+    mappedCategory: params.classification.category,
+    syncStatus: params.status,
+    syncError: params.message,
+    lastSyncedAt: new Date(),
+    lastSyncRunId: params.runId,
+    updatedAt: new Date(),
+    ...(params.documentId ? { documentId: params.documentId } : {}),
+  };
+  if (params.existingId) {
+    await db
+      .update(externalSourceFiles)
+      .set(patch)
+      .where(
+        and(
+          eq(externalSourceFiles.id, params.existingId),
+          eq(externalSourceFiles.communityId, params.ctx.communityId),
+        ),
+      );
+  } else {
+    await db.insert(externalSourceFiles).values({
+      organizationId: params.ctx.organizationId,
+      communityId: params.ctx.communityId,
+      sourceId: params.sourceId,
+      externalFileId: params.node.id,
+      parentExternalId: params.node.parents?.[0] ?? null,
+      isFolder: 0,
+      ...patch,
+    });
+  }
+  return link;
+}
+
+async function extractStoredFacts(params: {
+  ctx: TenantContext;
+  report: SyncReport;
+  documentId: string;
+  filename: string;
+  path: string;
+  allowRead: boolean;
+  webViewLink?: string;
+  driveFileId?: string;
+}): Promise<"extracted" | "failed" | "has_facts" | "deferred"> {
+  if (await alreadyExtracted(params.ctx, params.documentId)) return "has_facts";
+  if (!params.allowRead) return "deferred";
+  try {
+    const [doc] = await db
+      .select({
+        id: documents.id,
+        storageKey: documents.storageKey,
+        mimeType: documents.mimeType,
+        originalFilename: documents.originalFilename,
+      })
+      .from(documents)
+      .where(
+        and(
+          eq(documents.id, params.documentId),
+          eq(documents.communityId, params.ctx.communityId),
+        ),
+      )
+      .limit(1);
+    if (!doc) return "has_facts";
+    const obj = await withTimeout(
+      getStorageProvider().getObject(doc.storageKey),
+      STORE_TIMEOUT_MS,
+      "Reading the stored file",
+    );
+    const filename = doc.originalFilename || params.filename;
+    const text = textFromBytes(obj.body, doc.mimeType || obj.mimeType || "", filename);
+    const candidates = extractCandidatesFromText(text, {
+      filename,
+      path: params.path,
+    });
+    await persistCandidates({
+      ctx: params.ctx,
+      documentId: doc.id,
+      candidates,
+      report: params.report,
+    });
+    await markExtractionAttempt(params.ctx, doc.id);
+    params.report.totals.parsed += 1;
+    return "extracted";
+  } catch (err) {
+    if (isFatalStorageError(err)) throw err;
+    params.report.totals.parsingFailures += 1;
+    params.report.totals.failed += 1;
+    params.report.totals.errors += 1;
+    params.report.fileErrors.push({
+      path: params.path,
+      error:
+        err instanceof Error
+          ? `Stored file could not be reread for fact extraction. ${err.message}`
+          : "Stored file could not be reread for fact extraction.",
+      status: "failed",
+      driveFileId: params.driveFileId,
+      webViewLink: params.webViewLink,
+      documentId: params.documentId,
+    });
+    return "failed";
   }
 }
 
@@ -680,6 +985,30 @@ export async function syncExternalSource(
     if (!yielded && report.phase === "files") {
       const start = report.resumeFrom ?? 0;
       let downloadsStarted = 0;
+      let extractsThisChunk = 0;
+      report.pendingFactDocs ??= [];
+
+      const drainOneStoredFact = async () => {
+        while (
+          report.pendingFactDocs!.length > 0 &&
+          extractsThisChunk < 1 &&
+          Date.now() + 2_500 < deadline
+        ) {
+          const pending = report.pendingFactDocs!.shift()!;
+          const outcome = await extractStoredFacts({
+            ctx,
+            report,
+            documentId: pending.documentId,
+            filename: pending.filename,
+            path: pending.path,
+            allowRead: true,
+            webViewLink: pending.webViewLink,
+            driveFileId: pending.driveFileId,
+          });
+          if (outcome === "extracted" || outcome === "failed") extractsThisChunk += 1;
+        }
+      };
+      await drainOneStoredFact();
       for (
         let fileIndex = start;
         fileIndex < report.tree.length;
@@ -767,22 +1096,88 @@ export async function syncExternalSource(
               new Date(node.modifiedTime).toISOString() &&
             existing.sizeBytes === Number(node.size ?? existing.sizeBytes)));
 
-      if (unchanged && existing.documentId) {
+      const plan = classifySyncFile({
+        name: node.name,
+        mimeType: node.mimeType,
+        sizeBytes: Number(node.size ?? "") || null,
+        maxBytes: MAX_SYNC_FILE_BYTES,
+      });
+      const keepStoredOversized =
+        plan.action === "skip" &&
+        plan.status === "oversized" &&
+        Boolean(unchanged && existing?.documentId);
+      if (plan.action === "skip" && !keepStoredOversized) {
+        const link = await saveSourceFileStatus({
+          ctx,
+          sourceId: source.id,
+          runId: run.id,
+          node,
+          existingId: existing?.id,
+          status: plan.status,
+          message: plan.reason,
+          classification,
+          documentId: existing?.documentId,
+        });
+        if (plan.status === "unsupported") report.totals.unsupported += 1;
+        else if (plan.status === "oversized") report.totals.oversized += 1;
+        else report.totals.pendingTranscription += 1;
+        report.fileErrors.push({
+          path: node.path,
+          error: plan.reason,
+          status: plan.status,
+          driveFileId: node.id,
+          webViewLink: link,
+          documentId: existing?.documentId ?? undefined,
+        });
+        continue;
+      }
+
+      if (unchanged && existing?.documentId) {
+        const link = driveWebViewLink(node.id, node.webViewLink ?? existing.webViewLink);
         await db
           .update(externalSourceFiles)
           .set({
             name: node.name,
             path: node.path,
             mimeType: node.mimeType,
+            webViewLink: link,
             classificationLabel: classification.label,
             mappedCategory: classification.category,
             syncStatus: "unchanged",
+            syncError: null,
             lastSyncedAt: new Date(),
             lastSyncRunId: run.id,
             updatedAt: new Date(),
           })
-          .where(eq(externalSourceFiles.id, existing.id));
+          .where(
+            and(
+              eq(externalSourceFiles.id, existing.id),
+              eq(externalSourceFiles.communityId, ctx.communityId),
+            ),
+          );
         report.totals.unchanged += 1;
+        if (FACT_CATEGORIES.has(classification.category)) {
+          const outcome = await extractStoredFacts({
+            ctx,
+            report,
+            documentId: existing.documentId,
+            filename: node.name,
+            path: node.path,
+            allowRead: false,
+            webViewLink: link,
+            driveFileId: node.id,
+          });
+          if (outcome === "deferred") {
+            queueFactDoc(report, {
+              documentId: existing.documentId,
+              filename: node.name,
+              path: node.path,
+              category: classification.category,
+              webViewLink: link,
+              driveFileId: node.id,
+            });
+          }
+        }
         continue;
       }
 
@@ -791,13 +1186,6 @@ export async function syncExternalSource(
           report.resumeFrom = fileIndex;
           yielded = true;
           break;
-        }
-        const declaredSize = Number(node.size ?? "");
-        if (Number.isFinite(declaredSize) && declaredSize > MAX_SYNC_FILE_BYTES) {
-          const mb = Math.max(1, Math.round(declaredSize / (1024 * 1024)));
-          throw new Error(
-            `Skipped. This file is about ${mb} MB, over the 12 MB sync limit. Open it on Drive.`,
-          );
         }
         downloadsStarted += 1;
         report.resumeFrom = fileIndex + 1;
@@ -818,6 +1206,7 @@ export async function syncExternalSource(
           STORE_TIMEOUT_MS,
           "Saving the file",
         );
+        report.totals.downloaded += 1;
 
         let documentId = existing?.documentId ?? null;
         let changed = false;
@@ -998,7 +1387,11 @@ export async function syncExternalSource(
 
         if (documentId && changed) {
           try {
-            const text = textFromBytes(downloaded.bytes, downloaded.mimeType);
+            const text = textFromBytes(
+              downloaded.bytes,
+              downloaded.mimeType,
+              downloaded.filename,
+            );
             const candidates = extractCandidatesFromText(text, {
               filename: downloaded.filename,
               path: node.path,
@@ -1009,19 +1402,27 @@ export async function syncExternalSource(
               candidates,
               report,
             });
+            await markExtractionAttempt(ctx, documentId);
+            report.totals.parsed += 1;
             report.needsManualReview.push({
               documentId,
               filename: node.name,
-              reason: "Synced from Drive — processingStatus=needs_review",
+              reason: "Synced from Drive — extracted facts stay needs_review until a person verifies them",
             });
           } catch (parseErr) {
             report.totals.parsingFailures += 1;
+            report.totals.failed += 1;
+            report.totals.errors += 1;
             report.fileErrors.push({
               path: node.path,
               error:
                 parseErr instanceof Error
                   ? parseErr.message
                   : String(parseErr),
+              status: "failed",
+              driveFileId: node.id,
+              webViewLink: driveWebViewLink(node.id, node.webViewLink),
+              documentId,
             });
             report.needsManualReview.push({
               documentId,
@@ -1037,40 +1438,42 @@ export async function syncExternalSource(
             `Cannot store files on this server (${detail}). Netlify keeps documents in Netlify Blobs, not the function disk.`,
           );
         }
-        report.totals.errors += 1;
         const message = err instanceof Error ? err.message : String(err);
-        report.fileErrors.push({ path: node.path, error: message });
-        if (existing) {
-          await db
-            .update(externalSourceFiles)
-            .set({
-              syncStatus: "error",
-              syncError: message,
-              lastSyncRunId: run.id,
-              updatedAt: new Date(),
-            })
-            .where(eq(externalSourceFiles.id, existing.id));
-        } else {
-          await db.insert(externalSourceFiles).values({
-            organizationId: ctx.organizationId,
-            communityId: ctx.communityId,
-            sourceId: source.id,
-            externalFileId: node.id,
-            name: node.name,
-            mimeType: node.mimeType,
-            path: node.path,
-            syncStatus: "error",
-            syncError: message,
-            classificationLabel: classification.label,
-            mappedCategory: classification.category,
-            lastSyncRunId: run.id,
-          });
+        const overLimit = /sync limit|over the \d+ MB/i.test(message);
+        if (overLimit) report.totals.oversized += 1;
+        else {
+          report.totals.errors += 1;
+          report.totals.failed += 1;
         }
+        const link = await saveSourceFileStatus({
+          ctx,
+          sourceId: source.id,
+          runId: run.id,
+          node,
+          existingId: existing?.id,
+          status: overLimit ? "oversized" : "error",
+          message,
+          classification,
+          documentId: existing?.documentId,
+        });
+        report.fileErrors.push({
+          path: node.path,
+          error: message,
+          status: overLimit ? "oversized" : "failed",
+          driveFileId: node.id,
+          webViewLink: link,
+          documentId: existing?.documentId ?? undefined,
+        });
       }
     }
     if (!yielded) {
-      report.resumeFrom = report.tree.length;
-      report.phase = "finalize";
+      await drainOneStoredFact();
+      if ((report.pendingFactDocs?.length ?? 0) > 0) {
+        yielded = true;
+      } else {
+        report.resumeFrom = report.tree.length;
+        report.phase = "finalize";
+      }
     }
   }
 
@@ -1146,6 +1549,33 @@ export async function syncExternalSource(
       }
     }
 
+    if (report.totals.pendingTranscription > 0) {
+      noteDiscovery(
+        report,
+        `${report.totals.pendingTranscription} audio recording${report.totals.pendingTranscription === 1 ? "" : "s"} stayed on Google Drive for later transcription and ${report.totals.pendingTranscription === 1 ? "was" : "were"} not downloaded.`,
+      );
+    }
+    if (report.totals.oversized > 0) {
+      noteDiscovery(
+        report,
+        `${report.totals.oversized} file${report.totals.oversized === 1 ? "" : "s"} exceeded the 12 MB sync limit and stayed on Google Drive.`,
+      );
+    }
+    if (report.totals.unsupported > 0) {
+      noteDiscovery(
+        report,
+        `${report.totals.unsupported} file${report.totals.unsupported === 1 ? "" : "s"} used a format Community OS does not import. Each one still links to Google Drive.`,
+      );
+    }
+    if (report.totals.factsExtracted === 0) {
+      noteDiscovery(
+        report,
+        report.totals.parsed > 0
+          ? "Documents were read, but no financial figures were found in the extracted text. Nothing was marked verified."
+          : "No new financial facts were extracted. Unchanged documents that already have facts were left as they are. Statements stored without facts are reread from storage. Extracted facts stay in needs review until someone verifies them.",
+      );
+    }
+
     await compareValidationTargets(ctx, report);
 
     report.status = "completed";
@@ -1179,7 +1609,15 @@ export async function syncExternalSource(
       after: {
         runId: run.id,
         discovered: report.totals.discovered,
+        downloaded: report.totals.downloaded,
         snapshotted: report.totals.snapshotted,
+        unchanged: report.totals.unchanged,
+        unsupported: report.totals.unsupported,
+        oversized: report.totals.oversized,
+        failed: report.totals.failed,
+        parsed: report.totals.parsed,
+        factsExtracted: report.totals.factsExtracted,
+        factsNeedingReview: report.totals.factsNeedingReview,
         conflicts: report.totals.conflicts,
       },
     });

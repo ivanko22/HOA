@@ -153,23 +153,56 @@ async function renderSourceDetail({
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
             <Stat label="Discovered" value={report.totals.discovered} />
-            <Stat label="Snapshotted" value={report.totals.snapshotted} />
-            <Stat label="Unchanged" value={report.totals.unchanged} />
-            <Stat label="Changed" value={report.totals.changed} />
-            <Stat label="Skipped" value={report.totals.skipped} />
-            <Stat label="Errors" value={report.totals.errors} />
-            <Stat label="Parse failures" value={report.totals.parsingFailures} />
-            <Stat label="Conflicts" value={report.totals.conflicts} />
-            <Stat label="Candidate facts" value={report.totals.candidateFacts} />
             <Stat
-              label="Candidate txns"
-              value={report.totals.candidateTransactions}
+              label="Downloaded"
+              value={
+                report.totals.downloaded > 0
+                  ? report.totals.downloaded
+                  : report.totals.snapshotted + report.totals.changed
+              }
+            />
+            <Stat label="Unchanged" value={report.totals.unchanged} />
+            <Stat label="Skipped" value={report.totals.skipped} />
+            <Stat label="Unsupported" value={report.totals.unsupported} />
+            <Stat label="Oversized" value={report.totals.oversized} />
+            <Stat
+              label="Failed"
+              value={
+                report.totals.failed > 0
+                  ? report.totals.failed
+                  : report.totals.errors
+              }
+            />
+            <Stat label="Parsed" value={report.totals.parsed} />
+            <Stat
+              label="Facts extracted"
+              value={
+                report.totals.factsExtracted > 0
+                  ? report.totals.factsExtracted
+                  : report.totals.candidateFacts +
+                    report.totals.candidateMaintenanceCapital
+              }
             />
             <Stat
-              label="Maint/capital"
-              value={report.totals.candidateMaintenanceCapital}
+              label="Facts requiring review"
+              value={
+                report.totals.factsNeedingReview > 0
+                  ? report.totals.factsNeedingReview
+                  : report.totals.factsExtracted > 0
+                    ? report.totals.factsExtracted
+                    : report.totals.candidateFacts +
+                      report.totals.candidateMaintenanceCapital
+              }
+            />
+            <Stat
+              label="Transcription later"
+              value={report.totals.pendingTranscription}
             />
           </div>
+          <p className="text-sm text-[var(--muted)]">
+            Extracted figures stay in needs review until someone verifies them.
+            Audio recordings stay on Google Drive for later transcription.
+          </p>
 
           {report.discoveries.length ? (
             <div className="border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
@@ -257,11 +290,40 @@ async function renderSourceDetail({
 
           {report.fileErrors?.length ? (
             <div>
-              <h3 className="font-medium">File errors</h3>
-              <ul className="mt-2 space-y-1 text-sm">
+              <h3 className="font-medium">Files that need attention</h3>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                Each row names the Drive file and why it was skipped or failed.
+                Open the original, or the stored document when one exists.
+              </p>
+              <ul className="mt-2 space-y-2 text-sm">
                 {report.fileErrors.slice(0, 20).map((err) => (
-                  <li key={`${err.path}:${err.error}`}>
-                    {err.path}: {err.error}
+                  <li key={`${err.path}:${err.status ?? ""}:${err.error}`}>
+                    <Badge variant={issueVariant(err.status)}>{issueLabel(err.status)}</Badge>{" "}
+                    {err.webViewLink ? (
+                      <a
+                        href={err.webViewLink}
+                        className="text-[var(--accent)] hover:underline"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {err.path}
+                      </a>
+                    ) : (
+                      err.path
+                    )}
+                    {err.documentId ? (
+                      <>
+                        {" "}
+                        ·{" "}
+                        <Link
+                          href={`/app/documents/${err.documentId}`}
+                          className="text-[var(--accent)] hover:underline"
+                        >
+                          Open document
+                        </Link>
+                      </>
+                    ) : null}
+                    <p className="mt-1 text-[var(--muted)]">{err.error}</p>
                   </li>
                 ))}
               </ul>
@@ -327,17 +389,20 @@ async function renderSourceDetail({
                       <div>{f.path}</div>
                       <div className="text-xs text-[var(--muted)]">
                         {f.externalFileId}
-                        {f.webViewLink ? (
+                        {f.externalFileId ? (
                           <>
                             {" "}
                             ·{" "}
                             <a
-                              href={f.webViewLink}
+                              href={
+                                f.webViewLink ??
+                                `https://drive.google.com/file/d/${f.externalFileId}/view`
+                              }
                               className="text-[var(--accent)] hover:underline"
                               target="_blank"
                               rel="noreferrer"
                             >
-                              Drive
+                              Open in Drive
                             </a>
                           </>
                         ) : null}
@@ -347,7 +412,14 @@ async function renderSourceDetail({
                       {f.classificationLabel ?? "—"}
                     </td>
                     <td className="px-3 py-2">
-                      <Badge variant="needs_review">{f.syncStatus}</Badge>
+                      <Badge variant={syncStatusVariant(f.syncStatus)}>
+                        {syncStatusLabel(f.syncStatus)}
+                      </Badge>
+                      {f.syncError ? (
+                        <p className="mt-1 max-w-sm text-xs text-[var(--muted)]">
+                          {f.syncError}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2">
                       {f.documentId ? (
@@ -369,6 +441,81 @@ async function renderSourceDetail({
       </section>
     </div>
   );
+}
+
+function syncStatusLabel(status: string) {
+  switch (status) {
+    case "pending_transcription":
+      return "Transcription later";
+    case "oversized":
+      return "Oversized";
+    case "unsupported":
+      return "Unsupported";
+    case "error":
+      return "Failed";
+    case "unchanged":
+      return "Unchanged";
+    case "downloaded":
+      return "Downloaded";
+    case "linked":
+      return "Linked";
+    case "skipped":
+      return "Skipped";
+    default:
+      return status;
+  }
+}
+
+function syncStatusVariant(
+  status: string,
+): "pending" | "missing" | "unknown" | "conflicting" | "verified" | "available" | "source_only" | "needs_review" {
+  switch (status) {
+    case "pending_transcription":
+      return "pending";
+    case "oversized":
+      return "missing";
+    case "unsupported":
+      return "unknown";
+    case "error":
+      return "conflicting";
+    case "unchanged":
+    case "downloaded":
+      return "available";
+    case "linked":
+      return "verified";
+    case "skipped":
+      return "source_only";
+    default:
+      return "needs_review";
+  }
+}
+
+function issueLabel(status: string | undefined) {
+  switch (status) {
+    case "pending_transcription":
+      return "Transcription later";
+    case "oversized":
+      return "Oversized";
+    case "unsupported":
+      return "Unsupported";
+    default:
+      return "Failed";
+  }
+}
+
+function issueVariant(
+  status: string | undefined,
+): "pending" | "missing" | "unknown" | "conflicting" {
+  switch (status) {
+    case "pending_transcription":
+      return "pending";
+    case "oversized":
+      return "missing";
+    case "unsupported":
+      return "unknown";
+    default:
+      return "conflicting";
+  }
 }
 
 function Stat({ label, value }: { label: string; value: number }) {

@@ -31,6 +31,9 @@ export const externalFileSyncStatusEnum = pgEnum("external_file_sync_status", [
   "skipped",
   "unchanged",
   "error",
+  "unsupported",
+  "oversized",
+  "pending_transcription",
 ]);
 
 export const externalSyncRunStatusEnum = pgEnum("external_sync_run_status", [

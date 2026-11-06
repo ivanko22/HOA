@@ -4,11 +4,14 @@ import {
   getGoogleDriveCredentialsStatus,
   parseServiceAccountJson,
 } from "./credentials";
+import { MAX_SYNC_FILE_BYTES } from "@/lib/domain/sync-file";
 import {
   GoogleDriveConfigError,
   type DriveListedItem,
   type DriveTreeNode,
 } from "./types";
+
+export { MAX_SYNC_FILE_BYTES };
 
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_FIELDS =
@@ -251,7 +254,6 @@ export async function listDriveTree(
 
 const FILE_DOWNLOAD_TIMEOUT_MS = 3_500;
 /** Keep the function from buffering a recording or other large Drive file into memory. */
-export const MAX_SYNC_FILE_BYTES = 12 * 1024 * 1024;
 
 export async function readCappedBody(
   res: Response,
