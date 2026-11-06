@@ -15,25 +15,36 @@ export async function ensureWillowsSourceAction() {
   redirect(`/app/sources/${source.id}`);
 }
 
-export async function syncSourceAction(formData: FormData) {
+export type SyncActionResult =
+  | { ok: true; sourceId: string; runId: string; status: string }
+  | { ok: false; sourceId: string; message: string };
+
+export async function syncSourceAction(input: {
+  sourceId: string;
+  resumeRunId?: string;
+}): Promise<SyncActionResult> {
   const ctx = await requireTenantContext();
-  const sourceId = String(formData.get("sourceId") ?? "");
-  const resumeRaw = String(formData.get("resumeRunId") ?? "");
+  const sourceId = input.sourceId;
   try {
     const result = await syncExternalSource(ctx, sourceId, {
-      resumeRunId: resumeRaw || undefined,
+      resumeRunId: input.resumeRunId,
     });
     revalidatePath("/app/sources");
     revalidatePath(`/app/sources/${sourceId}`);
-    revalidatePath("/app/sources/reconciliation");
     revalidatePath("/app/documents");
-    revalidatePath("/app/data-health");
-    const params = new URLSearchParams({ run: result.runId });
-    if (result.report.status === "running") params.set("continue", "1");
-    redirect(`/app/sources/${sourceId}?${params.toString()}`);
+    return {
+      ok: true,
+      sourceId,
+      runId: result.runId,
+      status: result.report.status,
+    };
   } catch (err) {
     unstable_rethrow(err);
     revalidatePath(`/app/sources/${sourceId}`);
-    redirect(`/app/sources/${sourceId}?syncError=1`);
+    return {
+      ok: false,
+      sourceId,
+      message: err instanceof Error ? err.message : "Sync could not finish.",
+    };
   }
 }

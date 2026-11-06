@@ -9,8 +9,7 @@ import {
 } from "@/lib/services/drive-sync";
 import { normalizeSyncReport } from "@/lib/services/sync-report";
 import { Badge } from "@/components/ui/badge";
-import { syncSourceAction } from "../actions";
-import { ContinueSync } from "../continue-sync";
+import { SyncRunButton } from "../continue-sync";
 
 const TREE_PREVIEW_LIMIT = 250;
 
@@ -78,15 +77,7 @@ async function renderSourceDetail({
           </p>
         </div>
         {canSync ? (
-          <form action={syncSourceAction}>
-            <input type="hidden" name="sourceId" value={source.id} />
-            <button
-              type="submit"
-              className="bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:brightness-110"
-            >
-              Sync now
-            </button>
-          </form>
+          <SyncRunButton sourceId={source.id} label="Sync now" flush />
         ) : null}
       </div>
 
@@ -110,24 +101,13 @@ async function renderSourceDetail({
                 ? "Listing the Drive folder. Each step stays short so the host does not return a 502."
                 : "Saving files from Drive. Each step stays short so the host does not return a 502."}
           </p>
-          {autoContinue ? (
-            <ContinueSync
-              sourceId={source.id}
-              runId={latest.id}
-              resumeFrom={report?.resumeFrom ?? 0}
-            />
-          ) : (
-            <form action={syncSourceAction} className="mt-3">
-              <input type="hidden" name="sourceId" value={source.id} />
-              <input type="hidden" name="resumeRunId" value={latest.id} />
-              <button
-                type="submit"
-                className="bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:brightness-110"
-              >
-                Continue sync
-              </button>
-            </form>
-          )}
+          <SyncRunButton
+            key={`${latest.id}:${report?.phase ?? ""}:${report?.resumeFrom ?? 0}:${report?.totals.discovered ?? 0}:${report?.totals.snapshotted ?? 0}:${report?.totals.errors ?? 0}`}
+            sourceId={source.id}
+            resumeRunId={latest.id}
+            autoStart={autoContinue}
+            label="Continue sync"
+          />
         </div>
       ) : null}
 
