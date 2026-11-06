@@ -26,6 +26,7 @@ import {
   downloadDriveFile,
   FOLDER_MIME,
   listDriveChildren,
+  MAX_SYNC_FILE_BYTES,
 } from "@/lib/integrations/google-drive/client";
 import { getGoogleDriveCredentialsStatus } from "@/lib/integrations/google-drive/credentials";
 import { GoogleDriveConfigError } from "@/lib/integrations/google-drive/types";
@@ -375,17 +376,36 @@ async function nextDocumentVersion(documentId: string) {
 
 function textFromBytes(bytes: Buffer, mimeType: string): string {
   if (
+    mimeType.startsWith("audio/") ||
+    mimeType.startsWith("video/") ||
+    mimeType.startsWith("image/")
+  ) {
+    return "";
+  }
+  const sample = bytes.subarray(0, 512_000);
+  if (
     mimeType.startsWith("text/") ||
     mimeType === "application/json" ||
     mimeType === "text/csv" ||
     mimeType.includes("csv")
   ) {
-    return bytes.toString("utf8").slice(0, 500_000);
+    return sample.toString("utf8").slice(0, 500_000);
   }
-  // Best-effort: extract printable sequences from PDFs/binary for heuristics.
-  const raw = bytes.toString("latin1");
-  const printable = raw.replace(/[^\x09\x0a\x0d\x20-\x7e]/g, " ");
+  const printable = sample
+    .toString("latin1")
+    .replace(/[^\x09\x0a\x0d\x20-\x7e]/g, " ");
   return printable.slice(0, 200_000);
+}
+
+/** Save progress before a download so a killed function does not retry that file. */
+async function checkpointReport(runId: string, report: SyncReport) {
+  await db
+    .update(externalSyncRuns)
+    .set({
+      status: "running",
+      report,
+    })
+    .where(eq(externalSyncRuns.id, runId));
 }
 
 async function persistCandidates(params: {
@@ -772,7 +792,16 @@ export async function syncExternalSource(
           yielded = true;
           break;
         }
+        const declaredSize = Number(node.size ?? "");
+        if (Number.isFinite(declaredSize) && declaredSize > MAX_SYNC_FILE_BYTES) {
+          const mb = Math.max(1, Math.round(declaredSize / (1024 * 1024)));
+          throw new Error(
+            `Skipped. This file is about ${mb} MB, over the 12 MB sync limit. Open it on Drive.`,
+          );
+        }
         downloadsStarted += 1;
+        report.resumeFrom = fileIndex + 1;
+        await checkpointReport(run.id, report);
         const downloaded = await downloadDriveFile({
           id: node.id,
           mimeType: node.mimeType || "application/octet-stream",
