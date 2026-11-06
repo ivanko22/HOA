@@ -1,36 +1,65 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { syncSourceAction } from "./actions";
 
-export function ContinueSync({
+export function SyncRunButton({
   sourceId,
-  runId,
-  resumeFrom,
+  resumeRunId,
+  autoStart = false,
+  label,
+  flush = false,
 }: {
   sourceId: string;
-  runId: string;
-  resumeFrom: number;
+  resumeRunId?: string;
+  autoStart?: boolean;
+  label: string;
+  flush?: boolean;
 }) {
-  const formRef = useRef<HTMLFormElement>(null);
+  const router = useRouter();
+  const started = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const run = useCallback(async () => {
+    setPending(true);
+    setMessage(null);
+    try {
+      const result = await syncSourceAction({ sourceId, resumeRunId });
+      if (!result.ok) {
+        setMessage(result.message);
+        setPending(false);
+        return;
+      }
+      const params = new URLSearchParams({ run: result.runId });
+      if (result.status === "running") params.set("continue", "1");
+      router.replace(`/app/sources/${result.sourceId}?${params.toString()}`);
+    } catch (err) {
+      setMessage(
+        err instanceof Error ? err.message : "Sync could not finish.",
+      );
+      setPending(false);
+    }
+  }, [router, sourceId, resumeRunId]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      formRef.current?.requestSubmit();
-    }, 50);
-    return () => window.clearTimeout(timer);
-  }, [runId, resumeFrom]);
+    if (!autoStart || started.current) return;
+    started.current = true;
+    void run();
+  }, [autoStart, run]);
 
   return (
-    <form ref={formRef} action={syncSourceAction} className="mt-3">
-      <input type="hidden" name="sourceId" value={sourceId} />
-      <input type="hidden" name="resumeRunId" value={runId} />
+    <div className={flush ? undefined : "mt-3"}>
       <button
-        type="submit"
-        className="bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:brightness-110"
+        type="button"
+        onClick={() => void run()}
+        disabled={pending}
+        className="bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-60"
       >
-        Continue sync
+        {pending ? "Syncing…" : label}
       </button>
-    </form>
+      {message ? <p className="mt-2 max-w-xl break-words">{message}</p> : null}
+    </div>
   );
 }

@@ -112,14 +112,15 @@ const WILLOWS_FOLDER_ID = "1f_b0P34xEuiDEefrei6m2jNwHu3cxA2Y";
  * Stay under Netlify's synchronous function limit (10s on the free tier).
  * A full folder sync that runs longer is killed and the browser shows 502.
  */
-const SYNC_CHUNK_BUDGET_MS = 8_000;
+const SYNC_CHUNK_BUDGET_MS = 7_000;
 /**
- * One file per chunk: download, store, then a few database writes.
- * This reserve is the time those three steps need. Starting later in the
- * chunk used to let the download finish and the store call run past the
- * host limit, which the browser shows as "This page couldn't load".
+ * One file per chunk: download, store, then the database writes.
+ * The reply to the browser is a short result, not the rendered page, so this
+ * reserve only has to finish the file. Rendering the source page in the same
+ * request was cut off by the host and the browser reported
+ * "An unexpected response was received from the server."
  */
-const DOWNLOAD_RESERVE_MS = 6_500;
+const DOWNLOAD_RESERVE_MS = 6_000;
 const STORE_TIMEOUT_MS = 2_500;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -266,7 +267,53 @@ export async function listSourceFiles(ctx: TenantContext, sourceId: string) {
 export async function getLatestSyncRun(ctx: TenantContext, sourceId: string) {
   assertCan(ctx.capabilities, "documents.read");
   const [run] = await db
-    .select()
+    .select({
+      id: externalSyncRuns.id,
+      status: externalSyncRuns.status,
+      errorMessage: externalSyncRuns.errorMessage,
+      missingCredentials: externalSyncRuns.missingCredentials,
+      startedAt: externalSyncRuns.startedAt,
+      finishedAt: externalSyncRuns.finishedAt,
+      report: sql<Record<string, unknown>>`
+        (
+          CASE
+            WHEN jsonb_typeof(COALESCE(${externalSyncRuns.report}, '{}'::jsonb)) = 'object'
+            THEN COALESCE(${externalSyncRuns.report}, '{}'::jsonb)
+            ELSE '{}'::jsonb
+          END
+          - 'tree'
+          - 'fileErrors'
+          - 'pendingFolders'
+        ) || jsonb_build_object(
+          'tree', COALESCE((
+            SELECT jsonb_agg(elem) FROM (
+              SELECT elem
+              FROM jsonb_array_elements(
+                CASE
+                  WHEN jsonb_typeof(COALESCE(${externalSyncRuns.report}->'tree', '[]'::jsonb)) = 'array'
+                  THEN COALESCE(${externalSyncRuns.report}->'tree', '[]'::jsonb)
+                  ELSE '[]'::jsonb
+                END
+              ) AS elem
+              LIMIT 250
+            ) limited_tree
+          ), '[]'::jsonb),
+          'fileErrors', COALESCE((
+            SELECT jsonb_agg(elem) FROM (
+              SELECT elem
+              FROM jsonb_array_elements(
+                CASE
+                  WHEN jsonb_typeof(COALESCE(${externalSyncRuns.report}->'fileErrors', '[]'::jsonb)) = 'array'
+                  THEN COALESCE(${externalSyncRuns.report}->'fileErrors', '[]'::jsonb)
+                  ELSE '[]'::jsonb
+                END
+              ) AS elem
+              LIMIT 20
+            ) limited_errors
+          ), '[]'::jsonb)
+        )
+      `,
+    })
     .from(externalSyncRuns)
     .where(
       and(

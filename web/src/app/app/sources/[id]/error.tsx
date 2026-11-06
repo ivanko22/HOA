@@ -13,7 +13,11 @@ export default function SourcePageError({
       role="alert"
     >
       <p className="font-semibold">This source page couldn’t load</p>
-      <p className="mt-1 break-words">{error.message}</p>
+      <p className="mt-1 break-words">
+        {error.message.includes("unexpected response")
+          ? "The server was cut off before it could send the page. Files already saved are on Documents. Reload, then use Sync now to continue."
+          : error.message}
+      </p>
       {error.digest ? (
         <p className="mt-1 text-xs">Error {error.digest}</p>
       ) : null}

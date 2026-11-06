@@ -85,6 +85,11 @@ export default async function SourcesPage() {
                         {s.config.folderId}
                       </p>
                     ) : null}
+                    {s.lastError ? (
+                      <p className="mt-1 max-w-md text-xs text-red-800">
+                        {s.lastError.slice(0, 180)}
+                      </p>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3">{s.provider}</td>
                   <td className="px-4 py-3">
