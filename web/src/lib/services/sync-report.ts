@@ -14,6 +14,14 @@ const emptyTotals = (): SyncReport["totals"] => ({
   candidateTransactions: 0,
   candidateMaintenanceCapital: 0,
   conflicts: 0,
+  downloaded: 0,
+  unsupported: 0,
+  oversized: 0,
+  failed: 0,
+  parsed: 0,
+  factsExtracted: 0,
+  factsNeedingReview: 0,
+  pendingTranscription: 0,
 });
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -29,6 +37,29 @@ function asText(value: unknown): string {
 
 function asNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function issueStatus(row: Record<string, unknown>): SyncReport["fileErrors"][number]["status"] {
+  const status = row.status;
+  if (
+    status === "unsupported" ||
+    status === "oversized" ||
+    status === "pending_transcription" ||
+    status === "failed"
+  ) {
+    return status;
+  }
+  const path = asText(row.path);
+  const error = asText(row.error);
+  if (
+    /\.(m4a|mp3|wav|aac|ogg|flac|wma|aiff)$/i.test(path) ||
+    /audio recording|transcription/i.test(error)
+  ) {
+    return "pending_transcription";
+  }
+  if (/sync limit|over the \d+ MB/i.test(error)) return "oversized";
+  if (/not imported|unsupported file/i.test(error)) return "unsupported";
+  return "failed";
 }
 
 function asStringArray(value: unknown): string[] {
@@ -185,7 +216,22 @@ export function normalizeSyncReport(value: unknown): SyncReport | null {
       ? report.fileErrors.flatMap((item) => {
           const row = asRecord(item);
           if (!row) return [];
-          return [{ path: asText(row.path), error: asText(row.error) }];
+          const path = asText(row.path);
+          const driveFileId = asText(row.driveFileId) || undefined;
+          return [
+            {
+              path,
+              error: asText(row.error),
+              status: issueStatus(row),
+              driveFileId,
+              webViewLink:
+                asText(row.webViewLink) ||
+                (driveFileId
+                  ? `https://drive.google.com/file/d/${driveFileId}/view`
+                  : undefined),
+              documentId: asText(row.documentId) || undefined,
+            },
+          ];
         })
       : [],
   };

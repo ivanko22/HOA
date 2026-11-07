@@ -43,7 +43,35 @@ describe("normalizeSyncReport", () => {
       { year: 2025, status: "missing", note: "none" },
     ]);
     expect(report?.discoveries).toEqual(["2025 minutes found"]);
-    expect(report?.fileErrors).toEqual([{ path: "/a.pdf", error: "ENOENT" }]);
+    expect(report?.fileErrors).toEqual([
+      {
+        path: "/a.pdf",
+        error: "ENOENT",
+        status: "failed",
+        driveFileId: undefined,
+        webViewLink: undefined,
+        documentId: undefined,
+      },
+    ]);
+    expect(
+      normalizeSyncReport({
+        status: "completed",
+        fileErrors: [
+          {
+            path: "/Minutes/Recordings/ECM #4 10.14.2026.m4a",
+            error: "download timed out",
+          },
+          {
+            path: "/Financials/statement.pdf",
+            error: "Skipped. This file is about 40 MB, over the 12 MB sync limit. Open it on Drive.",
+            driveFileId: "abc123",
+          },
+        ],
+      })?.fileErrors.map((item) => [item.status, item.webViewLink]),
+    ).toEqual([
+      ["pending_transcription", undefined],
+      ["oversized", "https://drive.google.com/file/d/abc123/view"],
+    ]);
     expect(report?.matchedTargets[0]?.expected).toBe("120");
     expect(report?.matchedTargets[0]?.found).toBe("");
   });
