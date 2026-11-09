@@ -33,6 +33,7 @@ export const VerifiedCash: Story = {
       sourceReference: "Bank statement",
       asOfDate: "2026-03-01",
       drilldownHref: "/app/metrics/cash",
+      documentHref: "/app/documents/doc-1",
     },
   },
 };
@@ -57,6 +58,7 @@ export const UnknownReserve: Story = {
       sourceReference: null,
       asOfDate: null,
       drilldownHref: "/app/metrics/reserve_balance",
+      documentHref: null,
     },
   },
 };

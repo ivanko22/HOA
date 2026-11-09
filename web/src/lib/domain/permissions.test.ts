@@ -21,6 +21,13 @@ describe("permissions", () => {
     expect(can(caps, "import.approve")).toBe(false);
   });
 
+  it("lets a treasurer review facts and keeps owners from approving them", () => {
+    expect(can(capabilitiesForRoles(["treasurer"]), "finance.verify")).toBe(true);
+    expect(can(capabilitiesForRoles(["board_member"]), "finance.verify")).toBe(true);
+    expect(can(capabilitiesForRoles(["owner"]), "finance.verify")).toBe(false);
+    expect(can(capabilitiesForRoles(["property_manager"]), "finance.verify")).toBe(false);
+  });
+
   it("gives owner transparency but not finance.write", () => {
     const caps = capabilitiesForRoles(["owner"]);
     expect(can(caps, "transparency.read")).toBe(true);

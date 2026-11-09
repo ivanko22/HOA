@@ -166,11 +166,34 @@ export function normalizeSyncReport(value: unknown): SyncReport | null {
       ? report.missingYears.flatMap((item) => {
           const row = asRecord(item);
           if (!row || typeof row.year !== "number") return [];
+          const documents = Array.isArray(row.documents)
+            ? row.documents.flatMap((item) => {
+                const doc = asRecord(item);
+                if (!doc) return [];
+                const path = asText(doc.path);
+                const driveFileId = asText(doc.driveFileId);
+                if (!path || !driveFileId) return [];
+                const kind = doc.kind === "recording" ? "recording" : "minutes";
+                return [
+                  {
+                    name: asText(doc.name) || path,
+                    path,
+                    driveFileId,
+                    webViewLink:
+                      asText(doc.webViewLink) ||
+                      `https://drive.google.com/file/d/${driveFileId}/view`,
+                    documentId: asText(doc.documentId) || undefined,
+                    kind: kind as "minutes" | "recording",
+                  },
+                ];
+              })
+            : [];
           return [
             {
               year: row.year,
               status: asText(row.status),
               note: asText(row.note),
+              documents,
             },
           ];
         })

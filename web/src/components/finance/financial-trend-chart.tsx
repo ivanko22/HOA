@@ -18,17 +18,23 @@ import { METRIC_DEFINITIONS } from "@/lib/domain/metric-resolution";
 import { StatusBadge } from "@/components/verification/status-badge";
 
 const SERIES: MetricId[] = [
+  "hoa_income",
   "dues_collected",
-  "base_operating_expenses",
   "special_assessment_collected",
+  "base_operating_expenses",
+  "net_operating_result",
   "cash",
+  "reserve_balance",
 ];
 
 const COLORS: Record<string, string> = {
+  hoa_income: "#0369a1",
   dues_collected: "#0f766e",
   base_operating_expenses: "#1e3a5f",
   special_assessment_collected: "#b45309",
+  net_operating_result: "#7c3aed",
   cash: "#475569",
+  reserve_balance: "#0f766e",
 };
 
 type Row = {
@@ -83,8 +89,8 @@ export function FinancialTrendChart({ points }: { points: TrendPoint[] }) {
         <div>
           <h2 className="text-sm font-semibold">Financial trend</h2>
           <p className="text-xs text-[var(--muted)]">
-            Sparse series from source facts. Hover for verification; click a
-            point to open the fact.
+            Approved facts only. Income, dues, and assessments stay separate
+            from cash. Click a point to open its document.
           </p>
         </div>
         <label className="text-xs text-[var(--muted)]">
@@ -117,7 +123,9 @@ export function FinancialTrendChart({ points }: { points: TrendPoint[] }) {
               const metric =
                 activeMetric === "all" ? availableMetrics[0] : activeMetric;
               const point = row.meta[metric];
-              if (point?.factId) {
+              if (point?.documentId) {
+                router.push(`/app/documents/${point.documentId}`);
+              } else if (point?.factId) {
                 router.push(`/app/metrics/${point.metric}?factId=${point.factId}`);
               } else if (metric) {
                 router.push(`/app/metrics/${metric}`);

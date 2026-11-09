@@ -7,6 +7,7 @@ export const verificationStatuses = [
   "needs_review",
   "conflicting",
   "unknown",
+  "rejected",
 ] as const;
 
 export type VerificationStatus = (typeof verificationStatuses)[number];
@@ -20,6 +21,7 @@ export const verificationSeverity: Record<VerificationStatus, number> = {
   needs_review: 3,
   unknown: 4,
   conflicting: 5,
+  rejected: 6,
 };
 
 export function worstVerification(

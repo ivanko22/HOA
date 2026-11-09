@@ -7,6 +7,7 @@ export const verificationStatusEnum = pgEnum("verification_status", [
   "needs_review",
   "conflicting",
   "unknown",
+  "rejected",
 ]);
 
 export const roleCodeEnum = pgEnum("role_code", [

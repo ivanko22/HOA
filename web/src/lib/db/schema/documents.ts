@@ -110,6 +110,8 @@ export const facts = pgTable("facts", {
   label: text("label").notNull(),
   value: text("value"),
   numericValue: numeric("numeric_value", { precision: 14, scale: 2 }),
+  /** First extracted amount. Set once, when a reviewer corrects the value. */
+  originalNumericValue: numeric("original_numeric_value", { precision: 14, scale: 2 }),
   unit: text("unit"),
   periodStart: date("period_start"),
   periodEnd: date("period_end"),

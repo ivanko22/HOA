@@ -40,7 +40,7 @@ describe("normalizeSyncReport", () => {
     expect(report?.categoryCounts).toEqual({ Minutes: 2 });
     expect(report?.missingCredentials).toEqual([]);
     expect(report?.missingYears).toEqual([
-      { year: 2025, status: "missing", note: "none" },
+      { year: 2025, status: "missing", note: "none", documents: [] },
     ]);
     expect(report?.discoveries).toEqual(["2025 minutes found"]);
     expect(report?.fileErrors).toEqual([

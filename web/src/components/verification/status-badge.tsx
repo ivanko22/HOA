@@ -8,6 +8,7 @@ const labels: Record<VerificationStatus, string> = {
   needs_review: "Needs Review",
   conflicting: "Conflicting",
   unknown: "Unknown",
+  rejected: "Rejected",
 };
 
 export function StatusBadge({

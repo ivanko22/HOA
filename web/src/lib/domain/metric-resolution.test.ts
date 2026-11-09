@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveCollectionRate,
+  deriveNetOperatingResult,
   METRIC_DEFINITIONS,
   resolveMetricFromFacts,
   type ResolvedMetricCandidate,
@@ -115,6 +116,72 @@ describe("resolveMetricFromFacts", () => {
     expect(result.factId).toBeNull();
   });
 
+  it("does not use an unreviewed extraction as the dashboard figure", () => {
+    const result = resolveMetricFromFacts(
+      METRIC_DEFINITIONS.hoa_income,
+      [
+        candidate({
+          id: "draft",
+          factType: "operating_income",
+          numericValue: "9400.50",
+          verificationStatus: "needs_review",
+          label: "Total operating income",
+          documentId: "stmt",
+        }),
+        candidate({
+          id: "cash",
+          factType: "cash_balance",
+          numericValue: "99999.00",
+          verificationStatus: "verified",
+          label: "Cash balance",
+        }),
+      ],
+      period,
+    );
+    expect(result.value).toBeNull();
+    expect(result.verificationStatus).toBe("needs_review");
+    expect(result.documentId).toBeNull();
+  });
+
+  it("keeps regular dues, assessments, and income as separate metrics", () => {
+    const facts = [
+      candidate({
+        id: "dues",
+        factType: "monthly_dues_collected",
+        numericValue: "8100.00",
+        label: "HOA dues",
+      }),
+      candidate({
+        id: "assess",
+        factType: "special_assessment_collected",
+        numericValue: "1500.00",
+        label: "Assessment",
+      }),
+      candidate({
+        id: "income",
+        factType: "operating_income",
+        numericValue: "9400.50",
+        label: "Total operating income",
+      }),
+    ];
+    expect(
+      resolveMetricFromFacts(METRIC_DEFINITIONS.dues_collected, facts, period).value,
+    ).toBe("8100.00");
+    expect(
+      resolveMetricFromFacts(
+        METRIC_DEFINITIONS.special_assessment_collected,
+        facts,
+        period,
+      ).value,
+    ).toBe("1500.00");
+    expect(
+      resolveMetricFromFacts(METRIC_DEFINITIONS.hoa_income, facts, period).value,
+    ).toBe("9400.50");
+    expect(
+      resolveMetricFromFacts(METRIC_DEFINITIONS.cash, facts, period).value,
+    ).toBeNull();
+  });
+
   it("keeps unknown when numeric is null", () => {
     const result = resolveMetricFromFacts(
       METRIC_DEFINITIONS.cash,
@@ -215,5 +282,78 @@ describe("deriveCollectionRate", () => {
     const rate = deriveCollectionRate(collected, potential, period);
     expect(rate.value).toBeNull();
     expect(rate.verificationStatus).toBe("unknown");
+  });
+});
+
+describe("deriveNetOperatingResult", () => {
+  it("subtracts approved expenses from approved income and ignores cash", () => {
+    const facts = [
+      candidate({
+        id: "income",
+        factType: "operating_income",
+        numericValue: "9400.50",
+        verificationStatus: "verified",
+        documentId: "income-doc",
+      }),
+      candidate({
+        id: "expenses",
+        factType: "operating_expenses",
+        numericValue: "7200.25",
+        verificationStatus: "verified",
+        label: "Total operating expenses",
+        documentId: "expense-doc",
+      }),
+      candidate({
+        id: "cash",
+        factType: "cash_balance",
+        numericValue: "50000.00",
+        verificationStatus: "verified",
+      }),
+    ];
+    const income = resolveMetricFromFacts(METRIC_DEFINITIONS.hoa_income, facts, period);
+    const expenses = resolveMetricFromFacts(
+      METRIC_DEFINITIONS.base_operating_expenses,
+      facts,
+      period,
+    );
+    const net = deriveNetOperatingResult(income, expenses, period);
+    expect(net.value).toBe("2200.25");
+    expect(net.verificationStatus).toBe("verified");
+    expect(net.documentId).toBe("income-doc");
+    expect(net.notes).toMatch(/Cash balance is not included/);
+    expect(resolveMetricFromFacts(METRIC_DEFINITIONS.cash, facts, period).value).toBe(
+      "50000.00",
+    );
+  });
+
+  it("stays missing when income has not been approved", () => {
+    const income = resolveMetricFromFacts(
+      METRIC_DEFINITIONS.hoa_income,
+      [
+        candidate({
+          id: "income",
+          factType: "operating_income",
+          numericValue: "100.00",
+          verificationStatus: "needs_review",
+        }),
+      ],
+      period,
+    );
+    const expenses = resolveMetricFromFacts(
+      METRIC_DEFINITIONS.base_operating_expenses,
+      [
+        candidate({
+          id: "expenses",
+          factType: "operating_expenses",
+          numericValue: "40.00",
+          verificationStatus: "verified",
+          label: "Operating expenses",
+        }),
+      ],
+      period,
+    );
+    const net = deriveNetOperatingResult(income, expenses, period);
+    expect(net.value).toBeNull();
+    expect(net.verificationStatus).toBe("needs_review");
   });
 });

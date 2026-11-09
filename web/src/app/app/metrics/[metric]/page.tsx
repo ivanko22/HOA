@@ -27,13 +27,15 @@ export default async function MetricDetailPage({
   const display =
     detail.unit === "%"
       ? detail.value == null
-        ? "Unknown"
-        : detail.verificationStatus === "conflicting"
+        ? detail.verificationStatus === "conflicting"
           ? "Conflicting"
-          : `${detail.value}%`
+          : "Missing"
+        : `${detail.value}%`
       : detail.verificationStatus === "conflicting"
         ? "Conflicting"
-        : formatMoney(money(detail.value, detail.verificationStatus));
+        : detail.value == null
+          ? "Missing"
+          : formatMoney(money(detail.value, detail.verificationStatus));
 
   const highlighted =
     factId != null

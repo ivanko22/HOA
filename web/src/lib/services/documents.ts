@@ -24,6 +24,7 @@ import {
   type TenantContext,
 } from "@/lib/domain/permissions";
 import { getStorageProvider } from "@/lib/storage";
+import { correctionPatch } from "@/lib/domain/fact-review";
 import { recordAudit } from "./audit";
 
 export type DocumentListFilters = {
@@ -450,7 +451,9 @@ export async function verifyFact(
       verifiedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(facts.id, factId))
+    .where(
+      and(eq(facts.id, factId), eq(facts.communityId, ctx.communityId)),
+    )
     .returning();
 
   if (existing.provenanceId) {
@@ -476,5 +479,118 @@ export async function verifyFact(
     after: { verificationStatus: nextStatus },
   });
 
+  return updated;
+}
+
+export async function rejectExtractedFact(ctx: TenantContext, factId: string) {
+  assertCan(ctx.capabilities, "finance.verify");
+  const [existing] = await db
+    .select()
+    .from(facts)
+    .where(
+      and(
+        eq(facts.id, factId),
+        eq(facts.organizationId, ctx.organizationId),
+        eq(facts.communityId, ctx.communityId),
+      ),
+    )
+    .limit(1);
+  if (!existing) throw new Error("Fact not found");
+
+  const [updated] = await db
+    .update(facts)
+    .set({
+      verificationStatus: "rejected",
+      updatedAt: new Date(),
+    })
+    .where(and(eq(facts.id, factId), eq(facts.communityId, ctx.communityId)))
+    .returning();
+
+  await refreshDocumentProcessingStatus(ctx, existing.documentId);
+  await recordAudit({
+    ctx,
+    action: "fact.reject",
+    entityType: "fact",
+    entityId: factId,
+    before: {
+      verificationStatus: existing.verificationStatus,
+      numericValue: existing.numericValue,
+      sourceExcerpt: existing.sourceExcerpt,
+    },
+    after: {
+      verificationStatus: "rejected",
+      numericValue: existing.numericValue,
+      sourceExcerpt: existing.sourceExcerpt,
+    },
+  });
+  return updated;
+}
+
+export async function correctExtractedFact(
+  ctx: TenantContext,
+  factId: string,
+  amount: string,
+) {
+  assertCan(ctx.capabilities, "finance.verify");
+  const [existing] = await db
+    .select()
+    .from(facts)
+    .where(
+      and(
+        eq(facts.id, factId),
+        eq(facts.organizationId, ctx.organizationId),
+        eq(facts.communityId, ctx.communityId),
+      ),
+    )
+    .limit(1);
+  if (!existing) throw new Error("Fact not found");
+
+  const patch = correctionPatch(
+    {
+      numericValue: existing.numericValue,
+      originalNumericValue: existing.originalNumericValue,
+      sourceExcerpt: existing.sourceExcerpt,
+      sourcePage: existing.sourcePage,
+      sourceReference: existing.sourceReference,
+    },
+    amount,
+  );
+
+  const [updated] = await db
+    .update(facts)
+    .set({
+      numericValue: patch.numericValue,
+      originalNumericValue: patch.originalNumericValue,
+      verificationStatus: "needs_review",
+      verifiedBy: null,
+      verifiedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(facts.id, factId), eq(facts.communityId, ctx.communityId)))
+    .returning();
+
+  await refreshDocumentProcessingStatus(ctx, existing.documentId);
+  await recordAudit({
+    ctx,
+    action: "fact.correct",
+    entityType: "fact",
+    entityId: factId,
+    before: {
+      numericValue: existing.numericValue,
+      originalNumericValue: existing.originalNumericValue,
+      verificationStatus: existing.verificationStatus,
+      sourceExcerpt: existing.sourceExcerpt,
+      sourcePage: existing.sourcePage,
+      sourceReference: existing.sourceReference,
+    },
+    after: {
+      numericValue: patch.numericValue,
+      originalNumericValue: patch.originalNumericValue,
+      verificationStatus: "needs_review",
+      sourceExcerpt: existing.sourceExcerpt,
+      sourcePage: existing.sourcePage,
+      sourceReference: existing.sourceReference,
+    },
+  });
   return updated;
 }
