@@ -15,13 +15,13 @@ import {
 import {
   classifyDriveDocument,
   extractCandidatesFromText,
-  extractYears,
   isSameFinancialMetric,
   reviewStatusForExtractedFact,
   uniqueFinancialMetrics,
   type ExtractedCandidate,
 } from "@/lib/domain/drive-classify";
 import { textForExtraction } from "@/lib/domain/extract-text";
+import { minutesAvailability } from "@/lib/domain/minutes-availability";
 import {
   classifySyncFile,
   driveWebViewLink,
@@ -91,7 +91,19 @@ export type SyncReport = {
   };
   categoryCounts: Record<string, number>;
   minutesYearsFound: number[];
-  missingYears: { year: number; status: string; note: string }[];
+  missingYears: {
+    year: number;
+    status: string;
+    note: string;
+    documents?: {
+      name: string;
+      path: string;
+      driveFileId: string;
+      webViewLink: string;
+      documentId?: string;
+      kind: "minutes" | "recording";
+    }[];
+  }[];
   discoveries: string[];
   matchedTargets: {
     key: string;
@@ -1506,47 +1518,26 @@ export async function syncExternalSource(
       return { runId: run.id, report };
     }
 
-    const minutesYears = new Set<number>();
-    for (const node of report.tree) {
-      if (node.isFolder) continue;
-      const classification = classifyDriveDocument({
+    const minutes = minutesAvailability(
+      report.tree.map((node) => ({
+        id: node.id,
         name: node.name,
         path: node.path,
+        isFolder: node.isFolder,
         mimeType: node.mimeType,
-      });
-      if (classification.label === "Meeting Minutes") {
-        for (const y of extractYears(`${node.path} ${node.name}`)) {
-          minutesYears.add(y);
-        }
-      }
-    }
-
-    report.minutesYearsFound = [...minutesYears].sort();
-    for (const year of [2024, 2025, 2026]) {
-      if (minutesYears.has(year)) {
-        report.missingYears.push({
-          year,
-          status: "available",
-          note:
-            year === 2025
-              ? "IMPORTANT: 2025 meeting minutes were found in Drive (previously believed unavailable)."
-              : `${year} minutes found in Drive sync`,
-        });
-        if (year === 2025) {
-          report.discoveries.push(
-            "2025 meeting minutes discovered in Google Drive — previously believed unavailable.",
-          );
-        }
-      } else {
-        report.missingYears.push({
-          year,
-          status: year === 2025 ? "missing_expected" : "not_found_in_sync",
-          note:
-            year === 2025
-              ? "2025 minutes still not found — believed unavailable"
-              : `${year} minutes not detected in synced filenames/paths`,
-        });
-      }
+        webViewLink: node.webViewLink,
+      })),
+    );
+    report.missingYears = minutes.years;
+    report.minutesYearsFound = minutes.years
+      .filter((year) => year.status === "available")
+      .map((year) => year.year);
+    const found2025 = minutes.years.find((year) => year.year === 2025);
+    if (found2025?.status === "available") {
+      noteDiscovery(
+        report,
+        "2025 meeting minutes documents were identified. Open the year on this report to see each file.",
+      );
     }
 
     if (report.totals.pendingTranscription > 0) {

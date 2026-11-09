@@ -14,9 +14,11 @@ export default async function FinancialHealthPage() {
           Financial Health
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
-          KPIs resolve from the facts repository with verification status.
-          Unknown and conflicting values stay explicit — never coerced to zero.
-          Period: {dashboard.period.label} ({dashboard.period.start} →{" "}
+          Figures use approved facts only (verified or reported). Extracted
+          facts stay on Fact Review until someone approves them. Missing
+          figures stay blank. Cash balance is a balance-sheet amount and is
+          not mixed into income or the net operating result. Period:{" "}
+          {dashboard.period.label} ({dashboard.period.start} →{" "}
           {dashboard.period.end}).
         </p>
       </div>

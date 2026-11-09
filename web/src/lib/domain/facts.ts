@@ -152,11 +152,14 @@ export function aggregateMetricFacts(
 
   const withNumbers = relevant.filter((f) => f.numericValue != null);
   const statuses = relevant.map((f) => f.verificationStatus);
+  const authoritative = withNumbers.filter(
+    (f) => f.verificationStatus === "verified" || f.verificationStatus === "reported",
+  );
   const hasConflict =
-    statuses.includes("conflicting") ||
-    (withNumbers.length >= 2 &&
-      withNumbers.some((f) =>
-        numericConflict(f.numericValue, withNumbers[0].numericValue),
+    authoritative.some((f) => f.verificationStatus === "conflicting") ||
+    (authoritative.length >= 2 &&
+      authoritative.some((f) =>
+        numericConflict(f.numericValue, authoritative[0].numericValue),
       ));
 
   if (hasConflict) {
@@ -170,8 +173,7 @@ export function aggregateMetricFacts(
 
   const verified = withNumbers.filter((f) => f.verificationStatus === "verified");
   const reported = withNumbers.filter((f) => f.verificationStatus === "reported");
-  const chosen =
-    verified[0] ?? reported[0] ?? withNumbers[0] ?? null;
+  const chosen = verified[0] ?? reported[0] ?? null;
 
   if (!chosen || chosen.numericValue == null) {
     return {

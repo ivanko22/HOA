@@ -2,13 +2,16 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { auditEvents, documents, facts, financialPeriods } from "@/lib/db/schema";
 import {
+  DASHBOARD_METRIC_ORDER,
   deriveCollectionRate,
+  deriveNetOperatingResult,
   METRIC_DEFINITIONS,
   resolveMetricFromFacts,
   type MetricId,
   type ResolvedMetric,
   type ResolvedMetricCandidate,
 } from "@/lib/domain/metric-resolution";
+import { isAuthoritativeFactStatus } from "@/lib/domain/fact-review";
 import {
   assertCan,
   type TenantContext,
@@ -81,6 +84,24 @@ export async function resolveMetric(
   const candidates = await loadCommunityFactCandidates(ctx);
   const definition = METRIC_DEFINITIONS[metricId];
 
+  if (metricId === "net_operating_result") {
+    const direct = resolveMetricFromFacts(definition, candidates, period);
+    if (direct.value != null || direct.verificationStatus === "conflicting") {
+      return direct;
+    }
+    const income = resolveMetricFromFacts(
+      METRIC_DEFINITIONS.hoa_income,
+      candidates,
+      period,
+    );
+    const expenses = resolveMetricFromFacts(
+      METRIC_DEFINITIONS.base_operating_expenses,
+      candidates,
+      period,
+    );
+    return deriveNetOperatingResult(income, expenses, period);
+  }
+
   if (metricId === "collection_rate") {
     const direct = resolveMetricFromFacts(definition, candidates, period);
     if (direct.value != null || direct.verificationStatus === "conflicting") {
@@ -113,7 +134,7 @@ export async function resolveAllKpis(ctx: TenantContext): Promise<{
 }> {
   assertCan(ctx.capabilities, "transparency.read");
   const period = await resolveActivePeriod(ctx);
-  const ids = Object.keys(METRIC_DEFINITIONS) as MetricId[];
+  const ids = DASHBOARD_METRIC_ORDER;
   const metrics: ResolvedMetric[] = [];
   for (const id of ids) {
     metrics.push(await resolveMetric(ctx, id, period));
@@ -189,10 +210,13 @@ export type TrendPoint = {
 };
 
 const TREND_METRICS: MetricId[] = [
+  "hoa_income",
   "dues_collected",
-  "base_operating_expenses",
   "special_assessment_collected",
+  "base_operating_expenses",
+  "net_operating_result",
   "cash",
+  "reserve_balance",
 ];
 
 /**
@@ -211,6 +235,7 @@ export async function getFinancialTrend(
     const typed = candidates.filter((f) => def.factTypes.includes(f.factType));
     for (const fact of typed) {
       if (fact.numericValue == null) continue;
+      if (!isAuthoritativeFactStatus(fact.verificationStatus)) continue;
       if (
         def.preferLabelIncludes?.length &&
         !def.preferLabelIncludes.some((p) =>
@@ -234,6 +259,33 @@ export async function getFinancialTrend(
         documentId: fact.documentId,
       });
     }
+  }
+
+  const byPeriod = new Map<string, Partial<Record<MetricId, TrendPoint>>>();
+  for (const point of points) {
+    const bucket = byPeriod.get(point.periodLabel) ?? {};
+    bucket[point.metric] = point;
+    byPeriod.set(point.periodLabel, bucket);
+  }
+  for (const [periodLabel, bucket] of byPeriod) {
+    if (bucket.net_operating_result) continue;
+    const income = bucket.hoa_income;
+    const expenses = bucket.base_operating_expenses;
+    if (income?.value == null || expenses?.value == null) continue;
+    points.push({
+      metric: "net_operating_result",
+      periodLabel,
+      periodStart: income.periodStart,
+      periodEnd: income.periodEnd,
+      value: Number((income.value - expenses.value).toFixed(2)),
+      verificationStatus:
+        income.verificationStatus === "verified" &&
+        expenses.verificationStatus === "verified"
+          ? "verified"
+          : "reported",
+      factId: income.factId,
+      documentId: income.documentId,
+    });
   }
 
   return points.sort((a, b) => {

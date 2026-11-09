@@ -123,6 +123,22 @@ describe("aggregateMetricFacts", () => {
     expect(result.amount.amount).toBeNull();
   });
 
+  it("does not treat an unreviewed amount as the metric", () => {
+    const result = aggregateMetricFacts(
+      [
+        fact({
+          id: "1",
+          factType: "cash_balance",
+          numericValue: "12345.67",
+          verificationStatus: "needs_review",
+        }),
+      ],
+      "cash_balance",
+    );
+    expect(result.amount.amount).toBeNull();
+    expect(result.status).toBe("needs_review");
+  });
+
   it("surfaces reported amount when only reported exists", () => {
     const result = aggregateMetricFacts(
       [

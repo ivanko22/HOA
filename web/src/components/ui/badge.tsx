@@ -13,6 +13,7 @@ const badgeVariants = cva(
         needs_review: "bg-orange-50 text-orange-950 border-orange-200",
         conflicting: "bg-rose-50 text-rose-950 border-rose-200",
         unknown: "bg-slate-100 text-slate-700 border-slate-200",
+        rejected: "bg-rose-50 text-rose-950 border-rose-200",
         default: "bg-slate-50 text-slate-800 border-slate-200",
         available: "bg-emerald-50 text-emerald-900 border-emerald-200",
         missing: "bg-rose-50 text-rose-950 border-rose-200",

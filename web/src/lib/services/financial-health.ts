@@ -25,6 +25,7 @@ export type KpiCard = {
   sourceReference: string | null;
   asOfDate: string | null;
   drilldownHref: string;
+  documentHref: string | null;
 };
 
 export type FinancialHealthDashboard = {
@@ -42,14 +43,16 @@ function toKpi(m: ResolvedMetric): KpiCard {
     label: m.label,
     value: amount,
     displayValue: asPercent
-      ? m.value == null || m.verificationStatus === "unknown"
-        ? "Unknown"
-        : m.verificationStatus === "conflicting"
+      ? m.value == null
+        ? m.verificationStatus === "conflicting"
           ? "Conflicting"
-          : `${m.verificationStatus === "estimated" ? "~" : ""}${m.value}%`
+          : "Missing"
+        : `${m.verificationStatus === "estimated" ? "~" : ""}${m.value}%`
       : m.verificationStatus === "conflicting"
         ? "Conflicting"
-        : formatMoney(amount),
+        : m.value == null
+          ? "Missing"
+          : formatMoney(amount),
     unit: m.unit,
     period: {
       start: m.period.start ?? "",
@@ -63,6 +66,7 @@ function toKpi(m: ResolvedMetric): KpiCard {
     sourceReference: m.sourceReference,
     asOfDate: m.asOfDate,
     drilldownHref: `/app/metrics/${m.metric}`,
+    documentHref: m.documentId ? `/app/documents/${m.documentId}` : null,
   };
 }
 

@@ -7,6 +7,7 @@ import {
   getLatestSyncRun,
   listSourceFiles,
 } from "@/lib/services/drive-sync";
+import { minutesAvailability } from "@/lib/domain/minutes-availability";
 import { normalizeSyncReport } from "@/lib/services/sync-report";
 import { Badge } from "@/components/ui/badge";
 import { SyncRunButton } from "../continue-sync";
@@ -50,6 +51,17 @@ async function renderSourceDetail({
   const latest = await getLatestSyncRun(ctx, id);
   const report = normalizeSyncReport(latest?.report);
   const canSync = can(ctx.capabilities, "documents.manage");
+  const minutes = minutesAvailability(
+    files.map((file) => ({
+      id: file.externalFileId,
+      name: file.name,
+      path: file.path,
+      isFolder: file.isFolder,
+      mimeType: file.mimeType,
+      webViewLink: file.webViewLink,
+      documentId: file.documentId,
+    })),
+  );
 
   return (
     <div className="space-y-8">
@@ -226,20 +238,74 @@ async function renderSourceDetail({
             </div>
             <div>
               <h3 className="font-medium">Minutes years</h3>
-              <ul className="mt-2 space-y-1 text-sm">
-                {report.missingYears.map((y) => (
-                  <li key={y.year}>
-                    <Badge
-                      variant={
-                        y.status === "available" ? "verified" : "missing"
-                      }
-                    >
-                      {y.year}: {y.status}
-                    </Badge>{" "}
-                    <span className="text-[var(--muted)]">{y.note}</span>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                A year is available only when a minutes document is identified.
+                Recordings do not count.
+              </p>
+              <ul className="mt-2 space-y-3 text-sm">
+                {minutes.years.map((y) => (
+                  <li key={y.year} id={`minutes-${y.year}`}>
+                    <a href={`#minutes-${y.year}`} className="hover:underline">
+                      <Badge variant={y.status === "available" ? "verified" : "missing"}>
+                        {y.year}: {y.status === "available" ? "available" : y.status.replaceAll("_", " ")}
+                      </Badge>
+                    </a>
+                    <p className="mt-1 text-[var(--muted)]">{y.note}</p>
+                    {y.documents.length ? (
+                      <ul className="mt-1 space-y-1">
+                        {y.documents.map((doc) => (
+                          <li key={`${doc.driveFileId}:${doc.kind}`}>
+                            <span className="text-[var(--muted)]">
+                              {doc.kind === "recording" ? "Recording" : "Minutes"}:
+                            </span>{" "}
+                            {doc.path}{" "}
+                            <a
+                              href={doc.webViewLink}
+                              className="text-[var(--accent)] hover:underline"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open in Drive
+                            </a>
+                            {doc.documentId ? (
+                              <>
+                                {" "}
+                                ·{" "}
+                                <Link
+                                  href={`/app/documents/${doc.documentId}`}
+                                  className="text-[var(--accent)] hover:underline"
+                                >
+                                  Open document
+                                </Link>
+                              </>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </li>
                 ))}
               </ul>
+              {minutes.undated.length ? (
+                <div className="mt-3">
+                  <p className="font-medium">Minutes without a year in the name</p>
+                  <ul className="mt-1 space-y-1">
+                    {minutes.undated.map((doc) => (
+                      <li key={doc.driveFileId}>
+                        {doc.path}{" "}
+                        <a
+                          href={doc.webViewLink}
+                          className="text-[var(--accent)] hover:underline"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open in Drive
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           </div>
 
