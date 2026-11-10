@@ -505,6 +505,7 @@ async function persistCandidates(params: {
       periodEnd: facts.periodEnd,
       verificationStatus: facts.verificationStatus,
       sourceExcerpt: facts.sourceExcerpt,
+      sourceReference: facts.sourceReference,
     })
     .from(facts)
     .where(
@@ -604,6 +605,93 @@ async function persistCandidates(params: {
           updatedAt: new Date(),
         })
         .where(and(eq(facts.id, extra.id), eq(facts.communityId, ctx.communityId)));
+    }
+  }
+  if (candidates.some((candidate) => candidate.numericValue)) {
+    const looseIds = new Set(looseGuesses.map((row) => row.id));
+    for (const row of existingFacts) {
+      if (looseIds.has(row.id)) continue;
+      if (row.verificationStatus !== "needs_review") continue;
+      if (row.sourceReference !== "google_drive_sync") continue;
+      const next = candidates.find(
+        (candidate) => candidate.factType === row.factType && candidate.numericValue,
+      );
+      if (next) {
+        const unchanged =
+          next.numericValue === row.numericValue &&
+          next.label === row.label &&
+          (next.periodStart ?? null) === row.periodStart &&
+          (next.periodEnd ?? null) === row.periodEnd &&
+          (next.sourceExcerpt ?? null) === row.sourceExcerpt;
+        if (!unchanged) {
+          await db
+            .update(facts)
+            .set({
+              label: next.label,
+              numericValue: next.numericValue,
+              unit: next.unit ?? "USD",
+              periodStart: next.periodStart ?? null,
+              periodEnd: next.periodEnd ?? null,
+              asOfDate: next.asOfDate ?? null,
+              sourcePage: next.sourcePage ?? null,
+              sourceExcerpt: next.sourceExcerpt ?? null,
+              confidence: next.confidence ?? null,
+              notes: "Re-read from the labeled amount on the document.",
+              updatedAt: new Date(),
+            })
+            .where(and(eq(facts.id, row.id), eq(facts.communityId, ctx.communityId)));
+          await recordAudit({
+            ctx,
+            action: "fact.reextract",
+            entityType: "fact",
+            entityId: row.id,
+            before: {
+              label: row.label,
+              numericValue: row.numericValue,
+              sourceExcerpt: row.sourceExcerpt,
+            },
+            after: {
+              label: next.label,
+              numericValue: next.numericValue,
+              sourceExcerpt: next.sourceExcerpt,
+            },
+          });
+        }
+        const idx = known.findIndex(
+          (item) =>
+            item.factType === row.factType &&
+            item.numericValue === row.numericValue &&
+            item.periodStart === row.periodStart &&
+            item.periodEnd === row.periodEnd,
+        );
+        if (idx >= 0) {
+          known[idx] = {
+            factType: next.factType ?? row.factType,
+            label: next.label,
+            numericValue: next.numericValue ?? null,
+            periodStart: next.periodStart ?? null,
+            periodEnd: next.periodEnd ?? null,
+          };
+        }
+        continue;
+      }
+      await db
+        .update(facts)
+        .set({
+          verificationStatus: "rejected",
+          numericValue: null,
+          notes: "Removed because the document does not show this labeled amount.",
+          updatedAt: new Date(),
+        })
+        .where(and(eq(facts.id, row.id), eq(facts.communityId, ctx.communityId)));
+      await recordAudit({
+        ctx,
+        action: "fact.reextract",
+        entityType: "fact",
+        entityId: row.id,
+        before: { label: row.label, numericValue: row.numericValue },
+        after: { label: row.label, numericValue: null, verificationStatus: "rejected" },
+      });
     }
   }
   const existingTransactions = await db
@@ -776,7 +864,7 @@ const FACT_CATEGORIES = new Set([
   "bank_statement",
   "invoice",
 ]);
-const EXTRACTION_MARKER = "drive-text-v2";
+const EXTRACTION_MARKER = "drive-text-v3";
 
 function noteDiscovery(report: SyncReport, message: string) {
   if (!report.discoveries.includes(message)) report.discoveries.push(message);
@@ -806,20 +894,6 @@ async function alreadyExtracted(
   ctx: TenantContext,
   documentId: string,
 ): Promise<boolean> {
-  const factRows = await db
-    .select({
-      label: facts.label,
-      verificationStatus: facts.verificationStatus,
-    })
-    .from(facts)
-    .where(
-      and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
-    );
-  if (factRows.some((row) => isLooseRepairGuess(row))) {
-    const settled = factRows.some((row) => !isLooseRepairGuess(row));
-    if (!settled) return false;
-  }
-  if (factRows.length > 0) return true;
   const [marker] = await db
     .select({ id: documentExtractions.id })
     .from(documentExtractions)
@@ -832,7 +906,20 @@ async function alreadyExtracted(
       ),
     )
     .limit(1);
-  return Boolean(marker);
+  if (!marker) return false;
+  const factRows = await db
+    .select({
+      label: facts.label,
+      verificationStatus: facts.verificationStatus,
+    })
+    .from(facts)
+    .where(
+      and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
+    );
+  if (factRows.length > 0 && factRows.every((row) => isLooseRepairGuess(row))) {
+    return false;
+  }
+  return true;
 }
 
 async function markExtractionAttempt(ctx: TenantContext, documentId: string) {

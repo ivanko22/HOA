@@ -163,6 +163,141 @@ describe("extractYears / extractCandidatesFromText", () => {
     expect(found.find((item) => item.factType === "capital_expenditure")).toBeUndefined();
   });
 
+  it("reads the labeled month column on a cash-basis statement", () => {
+    const text = `
+      Page 1
+      September 2026
+      Operating Income & Expense
+      Income
+      HOA Dues 51,688.10 76.53 277,186.12
+      Assessment 2,054.75 3.04 12,100.00
+      Willows Assessment 21,282.55 31.49 106,253.64
+      Total Operating Income
+      Expense
+      Total Operating Expense
+      NOI - Net Operating Income 7,241.90 10.72 -73,479.77
+      Total Expense 60,298.70 89.28 380,727.29
+      Net Income 27,262.50 40.36 94,878.32
+      Cash in Bank 40,514.73
+      Cash in Bank - Reserve 0.03
+      Cash in Bank - Assessment 9,669.24
+      Total Liabilities
+      Capital
+      Bank Transfer -20.00
+    `;
+    const found = extractCandidatesFromText(text, {
+      filename: "Willows Financials Sep 2026.pdf",
+      path: "/Willows Condos Records/Financials/Willows Financials Sep 2026.pdf",
+    });
+    const amount = (factType: string) =>
+      found.find((item) => item.factType === factType)?.numericValue;
+    expect(amount("monthly_dues_collected")).toBe("51688.10");
+    expect(amount("operating_expenses")).toBe("60298.70");
+    expect(amount("special_assessment_collected")).toBe("21282.55");
+    expect(amount("net_income")).toBe("7241.90");
+    expect(amount("cash_balance")).toBe("40514.73");
+    expect(amount("reserve_balance")).toBe("0.03");
+    expect(amount("operating_income")).toBeUndefined();
+    expect(amount("total_liabilities")).toBeUndefined();
+    expect(found.map((item) => item.numericValue)).not.toContain("20.00");
+    expect(found.map((item) => item.numericValue)).not.toContain("2054.75");
+    expect(found.map((item) => item.numericValue)).not.toContain("27262.50");
+    expect(found.find((item) => item.factType === "net_income")?.sourceExcerpt).toMatch(
+      /Net Operating Income/,
+    );
+  });
+
+  it("skips a multi-month grid and keeps the selected-month total", () => {
+    const text = `
+      April 2026
+      Total Operating
+      Expense
+      0.00
+      0.00
+      0.00
+      5,826.70
+      Total Expense
+      52,593.93
+      122.73
+      72,669.02
+      NOI - Net Operating Income
+      -9,750.69
+      -22.75
+      -890.41
+    `;
+    const found = extractCandidatesFromText(text, {
+      filename: "Willows Financials April 2026(1).pdf",
+      path: "/Financials/Willows Financials April 2026(1).pdf",
+    });
+    expect(found.find((item) => item.factType === "operating_expenses")?.numericValue).toBe(
+      "52593.93",
+    );
+    expect(found.find((item) => item.factType === "net_income")?.numericValue).toBe("-9750.69");
+    expect(found.map((item) => item.numericValue)).not.toContain("0.00");
+  });
+
+  it("does not read an owner ledger or general-ledger change as the monthly assessment", () => {
+    const ledger = extractCandidatesFromText(
+      "Willows\nAssessment\n178.58\n178.58\n178.58\n0.00\nMoore, Mindy\nWillows\nAssessment\n155.48\n126.36\n0.00\nCarrasco, Oscar",
+      { filename: "July 2026(2).pdf", path: "/Financials/July 2026(2).pdf" },
+    );
+    expect(ledger.find((item) => item.factType === "special_assessment_collected")).toBeUndefined();
+
+    const cashAccount = extractCandidatesFromText(
+      "Cash in Bank - Assessment\n43,666.00\nWillows Assessment\n19,909.49\n44.12\n66,997.86",
+      { filename: "July 2026(2).pdf", path: "/Financials/July 2026(2).pdf" },
+    );
+    expect(
+      cashAccount.find((item) => item.factType === "special_assessment_collected")?.numericValue,
+    ).toBe("19909.49");
+
+    const gl = extractCandidatesFromText(
+      "Assessment\n-16,796.69\nNet Change\n0.00\n16,796.69",
+      { filename: "Willows Financials April 2025.pdf", path: "/Financials/April 2025.pdf" },
+    );
+    expect(gl.find((item) => item.factType === "special_assessment_collected")).toBeUndefined();
+  });
+
+  it("does not treat a financial-report total as an invoice", () => {
+    const found = extractCandidatesFromText("General ledger\nTotal\n131,932.97\n", {
+      filename: "Willows Financials April 2025.pdf",
+      path: "/Financials/Willows Financials April 2025.pdf",
+    });
+    expect(found.find((item) => item.factType === "invoice_amount")).toBeUndefined();
+  });
+
+  it("reads vendor amount labels that are not written as amount due", () => {
+    const shipley = extractCandidatesFromText(
+      "PRIOR BALANCE 1,892.00\nTHE WILLOWSAMOUNT1,507.00\nPAYMENT RECEIVED <1,892.00>",
+      { filename: "willows aug 26.pdf", path: "/Bills/Shipley/willows aug 26.pdf" },
+    );
+    expect(shipley.find((item) => item.factType === "invoice_amount")?.numericValue).toBe(
+      "1507.00",
+    );
+
+    const pleasePay = extractCandidatesFromText("Invoice 1981\nPLEASE PAY $1,370.00\nTOTAL DUE $1,370.00", {
+      filename: "Shipley Willows Feb 2026.pdf",
+      path: "/Bills/Shipley",
+    });
+    expect(pleasePay.find((item) => item.factType === "invoice_amount")?.numericValue).toBe(
+      "1370.00",
+    );
+
+    const webb = extractCandidatesFromText("InvoiceTotal: 3,250.00\nInvoice Balance 0.00 3,250.00", {
+      filename: "Invoice 18470.PDF",
+      path: "/Bills/July 2026",
+    });
+    expect(webb.find((item) => item.factType === "invoice_amount")?.numericValue).toBe("3250.00");
+
+    const spectrum = extractCandidatesFromText(
+      "Previous Balance $187.85\nPayment -187.85\nRemaining previous $0.00\nTotal Due By Oct 21, 2026 $186.73",
+      { filename: "Spectrum Office Bill Oct 2026", path: "/Bills/October 2026" },
+    );
+    expect(spectrum.find((item) => item.factType === "invoice_amount")?.numericValue).toBe(
+      "186.73",
+    );
+  });
+
   it("does not invent historical figures that are not in the document", () => {
     const found = extractCandidatesFromText("Board agenda with no amounts.", {
       filename: "minutes.pdf",

@@ -62,6 +62,54 @@ describe("text extraction", () => {
     );
   });
 
+  it("decodes an amount due that is stored as font glyphs", () => {
+    const phrase = "Amount Due $2,110.00";
+    const pairs = [...phrase]
+      .map((char, index) => {
+        const code = (index + 1).toString(16).padStart(4, "0");
+        const dest = char.charCodeAt(0).toString(16).padStart(4, "0");
+        return { code, dest };
+      });
+    const cmap = `beginbfchar\n${pairs
+      .map((pair) => `<${pair.code}> <${pair.dest}>`)
+      .join("\n")}\nendbfchar\n`;
+    const hex = pairs.map((pair) => pair.code).join("");
+    const content = `BT /F1 12 Tf <${hex}> Tj ET\n1 0 0 1 474.24 321.68 Tm\n`;
+    const pdf = Buffer.from(
+      `%PDF-1.4
+1 0 obj
+<< /Type /Font /ToUnicode 2 0 R >>
+endobj
+2 0 obj
+<< /Length ${cmap.length} >>
+stream
+${cmap}
+endstream
+endobj
+3 0 obj
+<< /Length ${content.length} >>
+stream
+${content}
+endstream
+endobj
+4 0 obj
+<< /Resources << /Font << /F1 1 0 R >> >> >>
+endobj
+`,
+      "latin1",
+    );
+    const text = extractPdfText(pdf);
+    expect(text).toMatch(/Amount Due \$2,110\.00/);
+    expect(text).not.toMatch(/474\.24/);
+    const facts = extractCandidatesFromText(text, {
+      filename: "Roof repair 6663.pdf",
+      path: "/Willows Condos Records/Monthly Bills and Receipts/By Month/August 2026/Roof repair 6663.pdf",
+    });
+    expect(facts.find((fact) => fact.factType === "invoice_amount")?.numericValue).toBe(
+      "2110.00",
+    );
+  });
+
   it("does not parse audio bytes as a PDF", () => {
     const bytes = Buffer.concat([
       Buffer.from("%PDF-1.1\n"),
