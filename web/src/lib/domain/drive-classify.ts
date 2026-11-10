@@ -8,6 +8,7 @@ export const driveClassificationLabels = [
   "Insurance",
   "Contracts",
   "Construction / Repair",
+  "Invoices",
   "Inspection",
   "Governance",
   "Other",
@@ -36,13 +37,14 @@ export function classifyDriveDocument(input: {
   ) {
     return { label: "Financial Statements", category: "financial_statement" };
   }
-  if (/invoice|legal fee|attorney|counsel|kaiser law/.test(hay)) {
-    return {
-      label: /legal|attorney|counsel|kaiser/.test(hay)
-        ? "Legal Invoices"
-        : "Legal Invoices",
-      category: /legal|attorney|counsel|kaiser/.test(hay) ? "legal" : "invoice",
-    };
+  if (/invoice|legal fee|attorney|counsel|kaiser law|\bbills\b|\breceipts?\b/.test(hay)) {
+    if (/legal|attorney|counsel|kaiser/.test(hay)) {
+      return { label: "Legal Invoices", category: "legal" };
+    }
+    if (/roof|stair|balcony|construction|repair|replace/.test(hay)) {
+      return { label: "Construction / Repair", category: "invoice" };
+    }
+    return { label: "Invoices", category: "invoice" };
   }
   if (/insurance|policy|certificate of insurance|\bcoi\b/.test(hay)) {
     return { label: "Insurance", category: "insurance" };
@@ -204,13 +206,70 @@ export function uniqueFinancialMetrics(
   return kept;
 }
 
-const moneyRe =
-  /\$?\s*([\d,]+\.\d{2}|\d{1,3}(?:,\d{3})+(?:\.\d{2})?|\d+\.\d{2})/g;
-
 function parseMoneyToken(raw: string): string | null {
   const cleaned = raw.replace(/[$,\s]/g, "");
   if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
   return Number(cleaned).toFixed(2);
+}
+
+/**
+ * A repair fact created by taking the first number in the file.
+ * PDF coordinates such as 474.24 were stored this way.
+ */
+export function isLooseRepairGuess(fact: {
+  label: string | null;
+  verificationStatus: string;
+}): boolean {
+  return (
+    fact.verificationStatus === "needs_review" &&
+    fact.label === "Capital / repair mention"
+  );
+}
+
+const INVOICE_AMOUNT_PATTERNS: { re: RegExp; label: string }[] = [
+  { re: /amount\s+due[^$\d]{0,80}(\$?\s*[\d,]+\.\d{2})/gi, label: "Amount due" },
+  { re: /balance\s+due[^$\d]{0,80}(\$?\s*[\d,]+\.\d{2})/gi, label: "Amount due" },
+  {
+    re: /(?:invoice|grand)\s+total[^$\d]{0,80}(\$?\s*[\d,]+\.\d{2})/gi,
+    label: "Invoice total",
+  },
+  {
+    re: /(?:^|[\n\r])\s*total\s*[:\-]?\s*(\$?\s*[\d,]+\.\d{2})/gi,
+    label: "Invoice total",
+  },
+];
+
+function labeledInvoiceAmount(text: string): {
+  numericValue: string;
+  label: string;
+  excerpt: string;
+} | null {
+  for (const pattern of INVOICE_AMOUNT_PATTERNS) {
+    pattern.re.lastIndex = 0;
+    const matches = [...text.matchAll(pattern.re)];
+    const parsed = matches
+      .map((match) => {
+        const numericValue = parseMoneyToken(match[1] ?? "");
+        return numericValue
+          ? { numericValue, excerpt: match[0].replace(/\s+/g, " ").trim().slice(0, 240) }
+          : null;
+      })
+      .filter((row): row is { numericValue: string; excerpt: string } => row != null);
+    const chosen = [...parsed].reverse().find((row) => row.numericValue !== "0.00");
+    if (chosen) {
+      return { ...chosen, label: pattern.label };
+    }
+  }
+  return null;
+}
+
+function billedOnDate(text: string): string | null {
+  const match =
+    /billed\s+on[:\s]+(0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])[/-](20\d{2})/i.exec(
+      text,
+    );
+  if (!match) return null;
+  return `${match[3]}-${match[1].padStart(2, "0")}-${match[2].padStart(2, "0")}`;
 }
 
 /**
@@ -224,7 +283,6 @@ export function extractCandidatesFromText(
 ): ExtractedCandidate[] {
   const out: ExtractedCandidate[] = [];
   const hay = `${context.path}\n${context.filename}\n${text}`;
-  const lower = hay.toLowerCase();
   const seen = new Set<string>();
 
   const patterns: {
@@ -362,29 +420,32 @@ export function extractCandidatesFromText(
     });
   }
 
-  if (
-    !seen.has("capital_expenditure") &&
-    /roof|stair|balcon/.test(lower) &&
-    /capital|repair|replace/.test(lower)
-  ) {
-    moneyRe.lastIndex = 0;
-    const money = [...hay.matchAll(moneyRe)]
-      .map((m) => parseMoneyToken(m[1]))
-      .filter(Boolean)[0];
-    const period = inferReportingPeriod(`${context.filename}\n${context.path}`);
-    out.push({
-      kind: "maintenance_capital",
-      factType: "capital_expenditure",
-      label: "Capital / repair mention",
-      numericValue: money ?? null,
-      unit: money ? "USD" : null,
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
-      asOfDate: period.asOfDate,
-      sourceExcerpt: context.filename,
-      confidence: "0.45",
-      rawValue: money,
-    });
+  if (!seen.has("invoice_amount")) {
+    const invoice = labeledInvoiceAmount(text);
+    if (invoice) {
+      const billed = billedOnDate(text);
+      const period = billed
+        ? monthPeriod(Number(billed.slice(0, 4)), Number(billed.slice(5, 7)))
+        : inferReportingPeriod(`${context.filename}\n${context.path}\n${invoice.excerpt}`);
+      const at = text.toLowerCase().indexOf(invoice.excerpt.slice(0, 24).toLowerCase());
+      const around = text.slice(Math.max(0, at - 160), at + invoice.excerpt.length);
+      const page = /Page\s+(\d+)/i.exec(around);
+      seen.add("invoice_amount");
+      out.push({
+        kind: "fact",
+        factType: "invoice_amount",
+        label: invoice.label,
+        numericValue: invoice.numericValue,
+        unit: "USD",
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
+        asOfDate: billed ?? period.asOfDate,
+        sourceExcerpt: invoice.excerpt,
+        sourcePage: page?.[1] ?? null,
+        confidence: "0.78",
+        rawValue: invoice.numericValue,
+      });
+    }
   }
 
   // CSV-ish transaction rows: date, description, amount

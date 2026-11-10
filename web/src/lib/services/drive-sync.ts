@@ -15,6 +15,7 @@ import {
 import {
   classifyDriveDocument,
   extractCandidatesFromText,
+  isLooseRepairGuess,
   isSameFinancialMetric,
   reviewStatusForExtractedFact,
   uniqueFinancialMetrics,
@@ -496,17 +497,115 @@ async function persistCandidates(params: {
   const candidates = uniqueFinancialMetrics(params.candidates);
   const existingFacts = await db
     .select({
+      id: facts.id,
       factType: facts.factType,
       label: facts.label,
       numericValue: facts.numericValue,
       periodStart: facts.periodStart,
       periodEnd: facts.periodEnd,
+      verificationStatus: facts.verificationStatus,
+      sourceExcerpt: facts.sourceExcerpt,
     })
     .from(facts)
     .where(
       and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
     );
-  const known = [...existingFacts];
+  const known: {
+    factType: string;
+    label: string;
+    numericValue: string | null;
+    periodStart: string | null;
+    periodEnd: string | null;
+  }[] = existingFacts.map((row) => ({
+    factType: row.factType,
+    label: row.label,
+    numericValue: row.numericValue,
+    periodStart: row.periodStart,
+    periodEnd: row.periodEnd,
+  }));
+  const invoice = candidates.find(
+    (candidate) => candidate.factType === "invoice_amount" && candidate.numericValue,
+  );
+  const looseGuesses = existingFacts.filter((row) => isLooseRepairGuess(row));
+  if (looseGuesses.length > 0) {
+    const [primary, ...rest] = looseGuesses;
+    if (invoice) {
+      await db
+        .update(facts)
+        .set({
+          factType: invoice.factType ?? "invoice_amount",
+          label: invoice.label,
+          numericValue: invoice.numericValue,
+          unit: "USD",
+          periodStart: invoice.periodStart ?? null,
+          periodEnd: invoice.periodEnd ?? null,
+          asOfDate: invoice.asOfDate ?? null,
+          sourcePage: invoice.sourcePage ?? null,
+          sourceExcerpt: invoice.sourceExcerpt ?? null,
+          sourceReference: "google_drive_sync",
+          confidence: invoice.confidence ?? null,
+          notes: "Corrected from an unlabeled file number to the invoice amount due.",
+          updatedAt: new Date(),
+        })
+        .where(and(eq(facts.id, primary.id), eq(facts.communityId, ctx.communityId)));
+      known.push({
+        factType: invoice.factType ?? "invoice_amount",
+        label: invoice.label,
+        numericValue: invoice.numericValue ?? null,
+        periodStart: invoice.periodStart ?? null,
+        periodEnd: invoice.periodEnd ?? null,
+      });
+      await recordAudit({
+        ctx,
+        action: "fact.reextract",
+        entityType: "fact",
+        entityId: primary.id,
+        before: {
+          label: primary.label,
+          numericValue: primary.numericValue,
+          sourceExcerpt: primary.sourceExcerpt,
+        },
+        after: {
+          label: invoice.label,
+          numericValue: invoice.numericValue,
+          sourceExcerpt: invoice.sourceExcerpt,
+        },
+      });
+    } else {
+      await db
+        .update(facts)
+        .set({
+          label: "Amount due",
+          numericValue: null,
+          unit: null,
+          sourceExcerpt: null,
+          notes: "Removed an unlabeled number. No invoice amount due was found in the document text.",
+          updatedAt: new Date(),
+        })
+        .where(and(eq(facts.id, primary.id), eq(facts.communityId, ctx.communityId)));
+      await recordAudit({
+        ctx,
+        action: "fact.reextract",
+        entityType: "fact",
+        entityId: primary.id,
+        before: {
+          label: primary.label,
+          numericValue: primary.numericValue,
+        },
+        after: { label: "Amount due", numericValue: null },
+      });
+    }
+    for (const extra of rest) {
+      await db
+        .update(facts)
+        .set({
+          verificationStatus: "rejected",
+          notes: "Duplicate unlabeled repair amount.",
+          updatedAt: new Date(),
+        })
+        .where(and(eq(facts.id, extra.id), eq(facts.communityId, ctx.communityId)));
+    }
+  }
   const existingTransactions = await db
     .select({ parsedValue: documentExtractions.parsedValue })
     .from(documentExtractions)
@@ -675,6 +774,7 @@ const FACT_CATEGORIES = new Set([
   "financial_statement",
   "meeting_minutes",
   "bank_statement",
+  "invoice",
 ]);
 const EXTRACTION_MARKER = "drive-text-v2";
 
@@ -706,13 +806,20 @@ async function alreadyExtracted(
   ctx: TenantContext,
   documentId: string,
 ): Promise<boolean> {
-  const [factRow] = await db
-    .select({ n: sql<number>`count(*)::int` })
+  const factRows = await db
+    .select({
+      label: facts.label,
+      verificationStatus: facts.verificationStatus,
+    })
     .from(facts)
     .where(
       and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
     );
-  if (Number(factRow?.n ?? 0) > 0) return true;
+  if (factRows.some((row) => isLooseRepairGuess(row))) {
+    const settled = factRows.some((row) => !isLooseRepairGuess(row));
+    if (!settled) return false;
+  }
+  if (factRows.length > 0) return true;
   const [marker] = await db
     .select({ id: documentExtractions.id })
     .from(documentExtractions)
@@ -1168,6 +1275,18 @@ export async function syncExternalSource(
             ),
           );
         report.totals.unchanged += 1;
+        if (classification.category === "invoice") {
+          await db
+            .update(documents)
+            .set({ category: "invoice", updatedAt: new Date() })
+            .where(
+              and(
+                eq(documents.id, existing.documentId),
+                eq(documents.communityId, ctx.communityId),
+                eq(documents.category, "other"),
+              ),
+            );
+        }
         if (FACT_CATEGORIES.has(classification.category)) {
           const outcome = await extractStoredFacts({
             ctx,
