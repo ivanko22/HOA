@@ -14,18 +14,38 @@ function unescapePdfString(value: string): string {
     .replace(/\\\\/g, "\\");
 }
 
+function decodePdfHex(hex: string): string {
+  const cleaned = hex.replace(/\s+/g, "");
+  if (cleaned.length < 2) return "";
+  const padded = cleaned.length % 2 === 0 ? cleaned : `${cleaned}0`;
+  const bytes = Buffer.from(padded, "hex");
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    let out = "";
+    for (let i = 2; i + 1 < bytes.length; i += 2) {
+      out += String.fromCharCode((bytes[i] << 8) | bytes[i + 1]);
+    }
+    return out;
+  }
+  return bytes.toString("latin1");
+}
+
 function textFromPdfContent(body: Buffer): string {
   const raw = body.toString("latin1");
+  const blocks = raw.match(/BT[\s\S]*?ET/g) ?? [];
   const pieces: string[] = [];
-  const show = /(?:\((?:\\.|[^\\)])*\)\s*)+Tj|\[(?:\s*\((?:\\.|[^\\)])*\)\s*-?\d*\.?\d*\s*)+\]\s*TJ/g;
   const literal = /\((?:\\.|[^\\)])*\)/g;
-  for (const match of raw.matchAll(show)) {
-    for (const item of match[0].matchAll(literal)) {
-      pieces.push(unescapePdfString(item[0].slice(1, -1)));
+  for (const block of blocks) {
+    for (const item of block.matchAll(literal)) {
+      const text = unescapePdfString(item[0].slice(1, -1)).trim();
+      if (text) pieces.push(text.slice(0, 500));
+    }
+    for (const hex of block.matchAll(/<([0-9A-Fa-f\s]+)>/g)) {
+      const text = decodePdfHex(hex[1]).replace(/[^\x09\x0a\x0d\x20-\x7e]/g, "").trim();
+      if (text) pieces.push(text.slice(0, 500));
     }
     pieces.push("\n");
   }
-  return pieces.join("").replace(/[^\S\n]+/g, " ").trim();
+  return pieces.join(" ").replace(/[^\S\n]+/g, " ").trim();
 }
 
 function inflateStream(raw: Buffer): Buffer | null {
@@ -107,8 +127,8 @@ export function textForExtraction(
     filename.toLowerCase().endsWith(".pdf") ||
     bytes.subarray(0, 5).toString("latin1") === "%PDF-";
   if (isPdf) {
-    const pdf = extractPdfText(bytes);
-    if (pdf.trim().length >= 12) return pdf;
+    // Do not scan raw PDF bytes. Drawing coordinates look like dollar amounts.
+    return extractPdfText(bytes);
   }
   const sample = bytes.subarray(0, 512_000);
   if (

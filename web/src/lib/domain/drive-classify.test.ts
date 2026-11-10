@@ -35,6 +35,15 @@ describe("classifyDriveDocument", () => {
     expect(c.category).toBe("financial_statement");
   });
 
+  it("classifies a roof repair bill as an invoice", () => {
+    const c = classifyDriveDocument({
+      name: "Roof repair 6663.pdf",
+      path: "/Willows Condos Records/Monthly Bills and Receipts/By Month/August 2026",
+    });
+    expect(c.category).toBe("invoice");
+    expect(c.label).toBe("Construction / Repair");
+  });
+
   it("classifies insurance", () => {
     const c = classifyDriveDocument({
       name: "Certificate of Insurance.pdf",
@@ -113,6 +122,45 @@ describe("extractYears / extractCandidatesFromText", () => {
     );
     expect(found.find((x) => x.factType === "total_assets")?.sourcePage).toBe("2");
     expect(found.every((x) => x.confidence !== "1.00")).toBe(true);
+  });
+
+  it("uses the invoice amount due instead of an unlabeled number", () => {
+    const text = `
+      Roof Repair
+      474.24 120.50 Td
+      Billed on: 08/22/2026
+      Amount Due: $2,110.00
+      Services 1 2,110.00
+      Total $2,110.00
+      Amount Paid $0.00
+      Applied Credits $0.00
+      Amount Due $2,110.00
+    `;
+    const found = extractCandidatesFromText(text, {
+      filename: "Roof repair 6663.pdf",
+      path: "/Willows Condos Records/Monthly Bills and Receipts/By Month/August 2026/Roof repair 6663.pdf",
+    });
+    const amounts = found
+      .filter((item) => item.numericValue)
+      .map((item) => item.numericValue);
+    expect(amounts).toContain("2110.00");
+    expect(amounts).not.toContain("474.24");
+    expect(amounts).not.toContain("0.00");
+    const due = found.find((item) => item.factType === "invoice_amount");
+    expect(due?.label).toBe("Amount due");
+    expect(due?.sourceExcerpt).toMatch(/Amount Due/i);
+    expect(due?.asOfDate).toBe("2026-08-22");
+    expect(due?.periodStart).toBe("2026-08-01");
+    expect(due?.periodEnd).toBe("2026-08-31");
+  });
+
+  it("does not turn a PDF coordinate into a roof repair amount", () => {
+    const found = extractCandidatesFromText("474.24 312.00 Td\nRoof repair", {
+      filename: "Roof repair 6663.pdf",
+      path: "/Willows Condos Records/Monthly Bills and Receipts/By Month/August 2026",
+    });
+    expect(found.map((item) => item.numericValue)).not.toContain("474.24");
+    expect(found.find((item) => item.factType === "capital_expenditure")).toBeUndefined();
   });
 
   it("does not invent historical figures that are not in the document", () => {

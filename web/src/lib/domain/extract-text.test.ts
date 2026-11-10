@@ -42,6 +42,26 @@ describe("text extraction", () => {
     );
   });
 
+  it("reads an invoice amount and ignores drawing coordinates", () => {
+    const bytes = pdfStream(
+      Buffer.from(
+        "BT 1 0 0 1 474.24 700 Tm (Amount Due:) Tj ( $2,110.00) Tj (Amount Paid) Tj ($0.00) Tj ET",
+      ),
+      "plain",
+    );
+    const text = textForExtraction(bytes, "application/pdf", "Roof repair 6663.pdf");
+    expect(text).toMatch(/Amount Due/);
+    expect(text).toMatch(/\$2,110\.00/);
+    expect(text).not.toMatch(/474\.24/);
+    const facts = extractCandidatesFromText(text, {
+      filename: "Roof repair 6663.pdf",
+      path: "/Willows Condos Records/Monthly Bills and Receipts/By Month/August 2026/Roof repair 6663.pdf",
+    });
+    expect(facts.find((fact) => fact.factType === "invoice_amount")?.numericValue).toBe(
+      "2110.00",
+    );
+  });
+
   it("does not parse audio bytes as a PDF", () => {
     const bytes = Buffer.concat([
       Buffer.from("%PDF-1.1\n"),
