@@ -207,9 +207,11 @@ export function uniqueFinancialMetrics(
 }
 
 function parseMoneyToken(raw: string): string | null {
-  const cleaned = raw.replace(/[$,\s]/g, "");
+  const negative = /^\s*-/.test(raw);
+  const cleaned = raw.replace(/[$,\s-]/g, "");
   if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
-  return Number(cleaned).toFixed(2);
+  const value = Number(cleaned).toFixed(2);
+  return negative ? `-${value}` : value;
 }
 
 /**
@@ -226,25 +228,37 @@ export function isLooseRepairGuess(fact: {
   );
 }
 
-const INVOICE_AMOUNT_PATTERNS: { re: RegExp; label: string }[] = [
+const INVOICE_AMOUNT_PATTERNS: { re: RegExp; label: string; bare?: boolean }[] = [
   { re: /amount\s+due[^$\d]{0,80}(\$?\s*[\d,]+\.\d{2})/gi, label: "Amount due" },
   { re: /balance\s+due[^$\d]{0,80}(\$?\s*[\d,]+\.\d{2})/gi, label: "Amount due" },
+  { re: /please\s+pay\s+(\$?\s*[\d,]+\.\d{2})/gi, label: "Amount due" },
+  {
+    re: /invoice\s*total\s*:?\s*(\$?\s*[\d,]+\.\d{2})/gi,
+    label: "Invoice total",
+  },
   {
     re: /(?:invoice|grand)\s+total[^$\d]{0,80}(\$?\s*[\d,]+\.\d{2})/gi,
     label: "Invoice total",
   },
   {
+    re: /total\s+due(?:\s+by)?[\s\S]{0,40}?(\$\s?[\d,]+\.\d{2})/gi,
+    label: "Amount due",
+  },
+  {
     re: /(?:^|[\n\r])\s*total\s*[:\-]?\s*(\$?\s*[\d,]+\.\d{2})/gi,
     label: "Invoice total",
+    bare: true,
   },
+  { re: /amount\s*(\$?\s*[\d,]+\.\d{2})/gi, label: "Amount due", bare: true },
 ];
 
-function labeledInvoiceAmount(text: string): {
+function labeledInvoiceAmount(text: string, allowBareTotal: boolean): {
   numericValue: string;
   label: string;
   excerpt: string;
 } | null {
   for (const pattern of INVOICE_AMOUNT_PATTERNS) {
+    if (pattern.bare && !allowBareTotal) continue;
     pattern.re.lastIndex = 0;
     const matches = [...text.matchAll(pattern.re)];
     const parsed = matches
@@ -259,6 +273,83 @@ function labeledInvoiceAmount(text: string): {
     if (chosen) {
       return { ...chosen, label: pattern.label };
     }
+  }
+  return null;
+}
+
+function readMoney(
+  source: string,
+): { raw: string; numeric: string; rest: string } | null {
+  const match = /^[\s:]*(-?\$?\s*-?[\d,]+\.\d{2})/.exec(source);
+  if (!match) return null;
+  const numeric = parseMoneyToken(match[1]);
+  if (!numeric) return null;
+  return { raw: match[1], numeric, rest: source.slice(match[0].length) };
+}
+
+function readPercent(source: string): { raw: string; rest: string } | null {
+  const match = /^[\s:]+(-?\d{1,3}\.\d{2})(?![\d,])/.exec(source);
+  if (!match) return null;
+  return { raw: match[1], rest: source.slice(match[0].length) };
+}
+
+/**
+ * The selected month is the first amount after the label.
+ * On these statements the next token is a percent and the one after that is
+ * year-to-date. A row of dollar amounts is a multi-month grid, so it is skipped.
+ * A single amount, as in "HOA dues $51,688.10", is still accepted.
+ */
+function statementAmount(
+  text: string,
+  label: RegExp,
+): { numeric: string; excerpt: string; index: number } | null {
+  const flags = label.flags.includes("g") ? label.flags : `${label.flags}g`;
+  const re = new RegExp(label.source, flags);
+  for (const match of text.matchAll(re)) {
+    const start = match.index ?? 0;
+    const rest = text.slice(start + match[0].length);
+    const month = readMoney(rest);
+    if (!month) continue;
+    if (/^\s*(starting balance|net change)/i.test(month.rest)) continue;
+    const percent = readPercent(month.rest);
+    if (percent) {
+      const ytd = readMoney(percent.rest);
+      if (!ytd) continue;
+      if (month.numeric === "0.00" && percent.raw === "0.00") continue;
+      // An owner ledger repeats the same charge. A statement percent does not.
+      if (Number(percent.raw) === Number(month.numeric)) continue;
+      // Report totals use a thousands separator. Owner charges such as 155.48 do not.
+      if (!month.raw.includes(",") && !ytd.raw.includes(",")) continue;
+    } else if (readMoney(month.rest)) {
+      continue;
+    } else if (!month.raw.includes(",")) {
+      continue;
+    }
+    return {
+      numeric: month.numeric,
+      excerpt: `${match[0]} ${month.raw}`.replace(/\s+/g, " ").trim().slice(0, 240),
+      index: start,
+    };
+  }
+  return null;
+}
+
+function immediateAmount(
+  text: string,
+  label: RegExp,
+): { numeric: string; excerpt: string; index: number } | null {
+  const flags = label.flags.includes("g") ? label.flags : `${label.flags}g`;
+  const re = new RegExp(label.source, flags);
+  for (const match of text.matchAll(re)) {
+    const start = match.index ?? 0;
+    const rest = text.slice(start + match[0].length);
+    const money = readMoney(rest);
+    if (!money) continue;
+    return {
+      numeric: money.numeric,
+      excerpt: `${match[0]} ${money.raw}`.replace(/\s+/g, " ").trim().slice(0, 240),
+      index: start,
+    };
   }
   return null;
 }
@@ -282,109 +373,146 @@ export function extractCandidatesFromText(
   context: { filename: string; path: string },
 ): ExtractedCandidate[] {
   const out: ExtractedCandidate[] = [];
-  const hay = `${context.path}\n${context.filename}\n${text}`;
   const seen = new Set<string>();
 
-  const patterns: {
+  const labeled: {
     re: RegExp;
     kind: ExtractedCandidate["kind"];
     factType: string;
     label: string;
     confidence: string;
+    statement?: boolean;
   }[] = [
     {
-      re: /cash\s+balance[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /cash\s+balance/i,
       kind: "fact",
       factType: "cash_balance",
       label: "Cash balance",
       confidence: "0.74",
     },
     {
-      re: /(?:hoa\s+)?dues[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /cash\s+in\s+bank\s*-\s*reserve/i,
+      kind: "fact",
+      factType: "reserve_balance",
+      label: "Reserve balance",
+      confidence: "0.74",
+    },
+    {
+      re: /cash\s+in\s+bank(?!\s*-)/i,
+      kind: "fact",
+      factType: "cash_balance",
+      label: "Cash in bank",
+      confidence: "0.74",
+    },
+    {
+      re: /hoa\s+dues/i,
       kind: "fact",
       factType: "monthly_dues_collected",
       label: "HOA dues",
       confidence: "0.74",
+      statement: true,
     },
     {
-      re: /operating\s+income[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /total\s+operating\s+income/i,
       kind: "fact",
       factType: "operating_income",
       label: "Total operating income",
       confidence: "0.74",
+      statement: true,
     },
     {
-      re: /total\s+income[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
-      kind: "fact",
-      factType: "operating_income",
-      label: "Total income",
-      confidence: "0.66",
-    },
-    {
-      re: /operating\s+expense[s]?[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /total\s+operating\s+expenses?/i,
       kind: "fact",
       factType: "operating_expenses",
       label: "Total operating expenses",
       confidence: "0.74",
+      statement: true,
     },
     {
-      re: /total\s+expense[s]?[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /total\s+expenses?/i,
       kind: "fact",
       factType: "operating_expenses",
       label: "Total expenses",
-      confidence: "0.62",
+      confidence: "0.7",
+      statement: true,
     },
     {
-      re: /(?:willows\s+)?assessment[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /willows\s+assessment/i,
+      kind: "fact",
+      factType: "special_assessment_collected",
+      label: "Willows assessment",
+      confidence: "0.76",
+      statement: true,
+    },
+    {
+      re: /(?<!willows\s)(?<!-\s)assessment/i,
       kind: "fact",
       factType: "special_assessment_collected",
       label: "Assessment",
-      confidence: "0.70",
+      confidence: "0.62",
+      statement: true,
     },
     {
-      re: /total\s+assets[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /total\s+assets/i,
       kind: "fact",
       factType: "total_assets",
       label: "Total assets",
       confidence: "0.72",
     },
     {
-      re: /total\s+liabilit(?:y|ies)[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /total\s+liabilit(?:y|ies)/i,
       kind: "fact",
       factType: "total_liabilities",
       label: "Total liabilities",
       confidence: "0.72",
     },
     {
-      re: /net\s+(?:operating\s+)?income[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /noi\s*-\s*net\s+operating\s+income/i,
+      kind: "fact",
+      factType: "net_income",
+      label: "Net operating income",
+      confidence: "0.76",
+      statement: true,
+    },
+    {
+      re: /net\s+operating\s+income/i,
+      kind: "fact",
+      factType: "net_income",
+      label: "Net operating income",
+      confidence: "0.74",
+      statement: true,
+    },
+    {
+      re: /net\s+income/i,
       kind: "fact",
       factType: "net_income",
       label: "Net income",
-      confidence: "0.70",
+      confidence: "0.66",
+      statement: true,
     },
     {
-      re: /accounts?\s+receivable[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /accounts?\s+receivable/i,
       kind: "fact",
       factType: "accounts_receivable",
       label: "Accounts receivable",
       confidence: "0.68",
     },
     {
-      re: /reserve\s+balance[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /reserve\s+balance/i,
       kind: "fact",
       factType: "reserve_balance",
       label: "Reserve balance",
       confidence: "0.72",
     },
     {
-      re: /reserve\s+contribution[^$\d]{0,40}(\$?[\d,]+\.\d{2})/i,
+      re: /reserve\s+contribution/i,
       kind: "fact",
       factType: "reserve_contribution",
       label: "Reserve contribution",
       confidence: "0.66",
     },
     {
-      re: /capital\s+need[^$\d]{0,40}(\$?[\d,]+\.?\d*)/i,
+      re: /capital\s+need/i,
       kind: "maintenance_capital",
       factType: "capital_need_estimate",
       label: "Capital need estimate",
@@ -392,36 +520,39 @@ export function extractCandidatesFromText(
     },
   ];
 
-  for (const p of patterns) {
+  for (const p of labeled) {
     if (seen.has(p.factType)) continue;
-    const m = p.re.exec(hay);
-    if (!m) continue;
-    const numeric = parseMoneyToken(m[1]);
-    if (!numeric) continue;
+    const found = (p.statement ? statementAmount : immediateAmount)(text, p.re);
+    if (!found) continue;
+    if (p.label === "Net income" && found.numeric === "0.00") continue;
     seen.add(p.factType);
-    const excerpt = m[0].slice(0, 240);
-    const at = hay.indexOf(m[0]);
-    const around = hay.slice(Math.max(0, at - 160), at + excerpt.length);
+    const around = text.slice(
+      Math.max(0, found.index - 160),
+      found.index + found.excerpt.length,
+    );
     const page = /Page\s+(\d+)/i.exec(around);
     const period = inferReportingPeriod(`${context.filename}\n${context.path}\n${around}`);
     out.push({
       kind: p.kind,
       factType: p.factType,
       label: p.label,
-      numericValue: numeric,
+      numericValue: found.numeric,
       unit: "USD",
       asOfDate: period.asOfDate,
       periodStart: period.periodStart,
       periodEnd: period.periodEnd,
-      sourceExcerpt: excerpt,
+      sourceExcerpt: found.excerpt,
       sourcePage: page?.[1] ?? null,
       confidence: p.confidence,
-      rawValue: m[1],
+      rawValue: found.numeric,
     });
   }
 
   if (!seen.has("invoice_amount")) {
-    const invoice = labeledInvoiceAmount(text);
+    const invoice = labeledInvoiceAmount(
+      text,
+      /bill|receipt|invoice/i.test(`${context.path} ${context.filename}`),
+    );
     if (invoice) {
       const billed = billedOnDate(text);
       const period = billed
