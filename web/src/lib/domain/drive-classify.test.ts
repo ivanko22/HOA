@@ -35,6 +35,15 @@ describe("classifyDriveDocument", () => {
     expect(c.category).toBe("financial_statement");
   });
 
+  it("classifies Willows monthly financial PDFs as financial statements", () => {
+    const c = classifyDriveDocument({
+      name: "Willows Financials Sep 2026.pdf",
+      path: "/Willows Condos Records/Financials/Willows Financials Sep 2026.pdf",
+    });
+    expect(c.label).toBe("Financial Statements");
+    expect(c.category).toBe("financial_statement");
+  });
+
   it("classifies a roof repair bill as an invoice", () => {
     const c = classifyDriveDocument({
       name: "Roof repair 6663.pdf",

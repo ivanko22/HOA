@@ -31,7 +31,7 @@ export function classifyDriveDocument(input: {
     return { label: "General Ledger", category: "financial_statement" };
   }
   if (
-    /financial statement|income statement|balance sheet|p&l|profit and loss|operating statement|treasurer report|assessment|monthly financial/.test(
+    /\/financials?(?:\/|$)|willows\s+financials|financial statement|income statement|balance sheet|p&l|profit and loss|operating statement|treasurer report|assessment|monthly financial/.test(
       hay,
     )
   ) {
