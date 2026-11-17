@@ -864,7 +864,7 @@ const FACT_CATEGORIES = new Set([
   "bank_statement",
   "invoice",
 ]);
-const EXTRACTION_MARKER = "drive-text-v3";
+const EXTRACTION_MARKER = "drive-text-v4";
 
 function noteDiscovery(report: SyncReport, message: string) {
   if (!report.discoveries.includes(message)) report.discoveries.push(message);
@@ -890,10 +890,34 @@ function queueFactDoc(
   }
 }
 
+async function documentFactRows(ctx: TenantContext, documentId: string) {
+  return db
+    .select({
+      label: facts.label,
+      verificationStatus: facts.verificationStatus,
+    })
+    .from(facts)
+    .where(
+      and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
+    );
+}
+
+async function documentHasLooseRepairGuess(
+  ctx: TenantContext,
+  documentId: string,
+): Promise<boolean> {
+  const factRows = await documentFactRows(ctx, documentId);
+  return factRows.some((row) => isLooseRepairGuess(row));
+}
+
 async function alreadyExtracted(
   ctx: TenantContext,
   documentId: string,
 ): Promise<boolean> {
+  const factRows = await documentFactRows(ctx, documentId);
+  if (factRows.length > 0 && factRows.every((row) => isLooseRepairGuess(row))) {
+    return false;
+  }
   const [marker] = await db
     .select({ id: documentExtractions.id })
     .from(documentExtractions)
@@ -906,20 +930,7 @@ async function alreadyExtracted(
       ),
     )
     .limit(1);
-  if (!marker) return false;
-  const factRows = await db
-    .select({
-      label: facts.label,
-      verificationStatus: facts.verificationStatus,
-    })
-    .from(facts)
-    .where(
-      and(eq(facts.communityId, ctx.communityId), eq(facts.documentId, documentId)),
-    );
-  if (factRows.length > 0 && factRows.every((row) => isLooseRepairGuess(row))) {
-    return false;
-  }
-  return true;
+  return Boolean(marker);
 }
 
 async function markExtractionAttempt(ctx: TenantContext, documentId: string) {
@@ -1374,7 +1385,10 @@ export async function syncExternalSource(
               ),
             );
         }
-        if (FACT_CATEGORIES.has(classification.category)) {
+        const needsFactPass =
+          FACT_CATEGORIES.has(classification.category) ||
+          (await documentHasLooseRepairGuess(ctx, existing.documentId));
+        if (needsFactPass) {
           const outcome = await extractStoredFacts({
             ctx,
             report,

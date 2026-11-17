@@ -14,6 +14,7 @@ export type ReviewFactShape = {
   sourceExcerpt: string | null;
   sourcePage: string | null;
   sourceReference: string | null;
+  documentId?: string | null;
 };
 
 export type ReviewFilter = {
@@ -90,7 +91,14 @@ export function factMatchesReviewFilter(
 export function conflictingFactIds(
   facts: Pick<
     ReviewFactShape,
-    "id" | "factType" | "numericValue" | "periodStart" | "periodEnd" | "asOfDate" | "verificationStatus"
+    | "id"
+    | "factType"
+    | "numericValue"
+    | "periodStart"
+    | "periodEnd"
+    | "asOfDate"
+    | "verificationStatus"
+    | "documentId"
   >[],
 ): Set<string> {
   const ids = new Set<string>();
@@ -108,11 +116,20 @@ export function conflictingFactIds(
       const aEnd = a.periodEnd ?? a.asOfDate ?? a.periodStart;
       const bStart = b.periodStart ?? b.asOfDate;
       const bEnd = b.periodEnd ?? b.asOfDate ?? b.periodStart;
-      const sameUndated = !aStart && !bStart;
-      const overlap =
-        sameUndated ||
-        overlapsRange(aStart, aEnd, bStart ?? "0000-01-01", bEnd ?? "9999-12-31");
-      if (!overlap) continue;
+      // Missing dates are not a shared period. Different undated invoices
+      // (each with its own Pay-button coordinate) are not conflicts.
+      if (!aStart || !bStart) {
+        if (
+          a.documentId &&
+          b.documentId &&
+          a.documentId === b.documentId
+        ) {
+          ids.add(a.id);
+          ids.add(b.id);
+        }
+        continue;
+      }
+      if (!overlapsRange(aStart, aEnd, bStart, bEnd ?? bStart)) continue;
       ids.add(a.id);
       ids.add(b.id);
     }

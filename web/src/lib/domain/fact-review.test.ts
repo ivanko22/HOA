@@ -42,6 +42,27 @@ describe("fact review", () => {
     expect(ids.has("rejected")).toBe(false);
   });
 
+  it("does not treat undated invoices from different documents as the same period", () => {
+    const undated = {
+      factType: "capital_expenditure",
+      numericValue: "474.24",
+      periodStart: null,
+      periodEnd: null,
+      asOfDate: null,
+      verificationStatus: "needs_review" as const,
+    };
+    const ids = conflictingFactIds([
+      { ...undated, id: "roof-a", documentId: "doc-a", numericValue: "474.24" },
+      { ...undated, id: "roof-b", documentId: "doc-b", numericValue: "1850.00" },
+      { ...undated, id: "gl", documentId: "doc-gl", numericValue: "6310.00", verificationStatus: "verified" },
+      { ...undated, id: "dup-1", documentId: "doc-a", numericValue: "100.00" },
+    ]);
+    expect(ids.has("roof-a")).toBe(true);
+    expect(ids.has("dup-1")).toBe(true);
+    expect(ids.has("roof-b")).toBe(false);
+    expect(ids.has("gl")).toBe(false);
+  });
+
   it("keeps the extracted amount and evidence when a value is corrected", () => {
     const next = correctionPatch(september, "$12,300.00");
     expect(next.numericValue).toBe("12300.00");
