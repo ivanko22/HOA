@@ -122,3 +122,12 @@ export const legalCaseStatusEnum = pgEnum("legal_case_status", [
   "dismissed",
   "closed",
 ]);
+
+/** Automated document-evidence check. Separate from human approval. */
+export const visualVerificationStatusEnum = pgEnum("visual_verification_status", [
+  "visual_match",
+  "mismatch",
+  "ambiguous",
+  "unable",
+  "unchecked",
+]);

@@ -91,6 +91,19 @@ export const factTypes = [
   "other",
 ] as const;
 
+/** Automated evidence check. Separate from human verificationStatus. */
+export const visualVerificationStatuses = [
+  "visual_match",
+  "mismatch",
+  "ambiguous",
+  "unable",
+  "unchecked",
+] as const;
+
+export type VisualVerificationStatus =
+  (typeof visualVerificationStatuses)[number];
+export const visualVerificationStatusSchema = z.enum(visualVerificationStatuses);
+
 export type FactType = (typeof factTypes)[number];
 export const factTypeSchema = z.enum(factTypes);
 

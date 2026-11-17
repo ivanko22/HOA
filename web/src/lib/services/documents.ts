@@ -12,6 +12,7 @@ import type {
   DocumentCategory,
   DocumentProcessingStatus,
   VerificationStatus,
+  VisualVerificationStatus,
 } from "@/lib/domain/enums";
 import {
   createFactInputSchema,
@@ -48,6 +49,23 @@ export type DocumentListItem = {
   uploadedAt: string;
   uploadedByName: string | null;
   byteSize: number;
+  mimeType: string;
+  primaryFactPage: string | null;
+  primaryFactExcerpt: string | null;
+  primaryFactAmount: string | null;
+  financialFacts: {
+    id: string;
+    label: string;
+    factType: string;
+    numericValue: string | null;
+    periodStart: string | null;
+    periodEnd: string | null;
+    asOfDate: string | null;
+    sourcePage: string | null;
+    sourceExcerpt: string | null;
+    evidenceMatchText: string | null;
+    visualVerificationStatus: VisualVerificationStatus;
+  }[];
 };
 
 function tenantDocFilter(ctx: TenantContext) {
@@ -77,6 +95,16 @@ export async function listDocuments(
     .select({
       id: facts.id,
       documentId: facts.documentId,
+      label: facts.label,
+      factType: facts.factType,
+      numericValue: facts.numericValue,
+      periodStart: facts.periodStart,
+      periodEnd: facts.periodEnd,
+      asOfDate: facts.asOfDate,
+      sourcePage: facts.sourcePage,
+      sourceExcerpt: facts.sourceExcerpt,
+      evidenceMatchText: facts.evidenceMatchText,
+      visualVerificationStatus: facts.visualVerificationStatus,
     })
     .from(facts)
     .where(
@@ -97,8 +125,37 @@ export async function listDocuments(
     );
 
   const factCountByDoc = new Map<string, number>();
+  const primaryFactByDoc = new Map<
+    string,
+    { page: string | null; excerpt: string | null; amount: string | null }
+  >();
+  const financialFactsByDoc = new Map<string, DocumentListItem["financialFacts"]>();
   for (const f of allFacts) {
     factCountByDoc.set(f.documentId, (factCountByDoc.get(f.documentId) ?? 0) + 1);
+    if (f.numericValue != null) {
+      const list = financialFactsByDoc.get(f.documentId) ?? [];
+      list.push({
+        id: f.id,
+        label: f.label,
+        factType: f.factType,
+        numericValue: f.numericValue,
+        periodStart: f.periodStart,
+        periodEnd: f.periodEnd,
+        asOfDate: f.asOfDate,
+        sourcePage: f.sourcePage,
+        sourceExcerpt: f.sourceExcerpt,
+        evidenceMatchText: f.evidenceMatchText,
+        visualVerificationStatus: f.visualVerificationStatus,
+      });
+      financialFactsByDoc.set(f.documentId, list);
+      if (!primaryFactByDoc.has(f.documentId)) {
+        primaryFactByDoc.set(f.documentId, {
+          page: f.sourcePage,
+          excerpt: f.sourceExcerpt,
+          amount: f.numericValue,
+        });
+      }
+    }
   }
 
   const linksByDoc = new Map<string, string[]>();
@@ -124,6 +181,11 @@ export async function listDocuments(
         uploadedAt: d.createdAt.toISOString(),
         uploadedByName: uploaderName,
         byteSize: d.byteSize,
+        mimeType: d.mimeType,
+        primaryFactPage: primaryFactByDoc.get(d.id)?.page ?? null,
+        primaryFactExcerpt: primaryFactByDoc.get(d.id)?.excerpt ?? null,
+        primaryFactAmount: primaryFactByDoc.get(d.id)?.amount ?? null,
+        financialFacts: financialFactsByDoc.get(d.id) ?? [],
       } satisfies DocumentListItem;
     })
     .filter((d) => {

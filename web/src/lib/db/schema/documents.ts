@@ -12,6 +12,7 @@ import {
   documentCategoryEnum,
   documentProcessingStatusEnum,
   verificationStatusEnum,
+  visualVerificationStatusEnum,
 } from "./enums";
 import { communities, organizations, users } from "./tenancy";
 import { provenanceRecords } from "./provenance";
@@ -32,6 +33,8 @@ export const documents = pgTable("documents", {
   originalFilename: text("original_filename"),
   mimeType: text("mime_type").notNull().default("application/pdf"),
   byteSize: integer("byte_size").notNull().default(0),
+  /** SHA-256 of stored bytes. Used for preview cache keys. */
+  contentHash: text("content_hash"),
   documentDate: date("document_date"),
   periodStart: date("period_start"),
   periodEnd: date("period_end"),
@@ -124,6 +127,19 @@ export const facts = pgTable("facts", {
     .default("needs_review"),
   confidence: numeric("confidence", { precision: 3, scale: 2 }),
   notes: text("notes"),
+  /** Automated visual/evidence check. Never sets human verificationStatus. */
+  visualVerificationStatus: visualVerificationStatusEnum(
+    "visual_verification_status",
+  )
+    .notNull()
+    .default("unchecked"),
+  visualFoundValue: numeric("visual_found_value", { precision: 14, scale: 2 }),
+  visualVerificationNotes: text("visual_verification_notes"),
+  /** Optional page-local box: { page, x, y, w, h } in 0–1 page fractions. */
+  evidenceBbox: jsonb("evidence_bbox"),
+  evidenceMatchText: text("evidence_match_text"),
+  /** Document content hash at extraction / verification time. */
+  contentHash: text("content_hash"),
   provenanceId: uuid("provenance_id").references(() => provenanceRecords.id),
   createdBy: uuid("created_by").references(() => users.id),
   verifiedBy: uuid("verified_by").references(() => users.id),

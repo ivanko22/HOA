@@ -8,6 +8,7 @@ import {
   type DocumentProcessingStatus,
 } from "@/lib/domain/enums";
 import { DocumentStatusBadge } from "@/components/documents/document-status-badge";
+import { DocumentFactsExpand } from "@/components/documents/document-facts-expand";
 import { Badge } from "@/components/ui/badge";
 import { UploadDocumentForm } from "./upload-form";
 
@@ -152,7 +153,10 @@ export default async function DocumentsPage({
           <table className="w-full min-w-[960px] text-left text-sm">
             <thead className="bg-[var(--surface-hover)] text-xs uppercase tracking-wide text-[var(--muted)]">
               <tr>
-                <th className="px-4 py-2">Document</th>
+                <th className="px-4 py-2" colSpan={2}>
+                  Document / evidence
+                </th>
+                <th className="px-4 py-2">Primary amount</th>
                 <th className="px-4 py-2">Category</th>
                 <th className="px-4 py-2">Period / Date</th>
                 <th className="px-4 py-2">Verification Status</th>
@@ -164,18 +168,50 @@ export default async function DocumentsPage({
             <tbody>
               {rows.map((d) => (
                 <tr key={d.id} className="border-t border-[var(--border)]">
-                  <td className="px-4 py-3">
-                    <Link
-                      href={`/app/documents/${d.id}`}
-                      className="font-medium text-[var(--accent)] hover:underline"
-                    >
-                      {d.title}
-                    </Link>
-                    {d.byteSize === 0 ? (
-                      <p className="text-xs text-[var(--muted)]">
-                        Catalog entry (no file bytes)
+                  <td className="px-4 py-3" colSpan={2}>
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          href={`/app/documents/${d.id}`}
+                          className="font-medium text-[var(--accent)] hover:underline"
+                        >
+                          {d.title}
+                        </Link>
+                        {d.byteSize === 0 ? (
+                          <p className="text-xs text-[var(--muted)]">
+                            Catalog entry (no file bytes)
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    {d.byteSize > 0 && d.financialFacts.length > 0 ? (
+                      <div className="mt-2">
+                        <DocumentFactsExpand
+                          documentId={d.id}
+                          title={d.title}
+                          mimeType={d.mimeType}
+                          facts={d.financialFacts.map((fact) => ({
+                            ...fact,
+                            periodLabel:
+                              fact.periodStart || fact.periodEnd
+                                ? `${fact.periodStart ?? "?"} → ${fact.periodEnd ?? "?"}`
+                                : fact.asOfDate ?? "Undated",
+                          }))}
+                        />
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-[var(--muted)]">
+                        No extracted monetary amounts
                       </p>
-                    ) : null}
+                    )}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">
+                    {d.primaryFactAmount
+                      ? new Intl.NumberFormat("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                        }).format(Number(d.primaryFactAmount))
+                      : "—"}
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant="default">{categoryLabels[d.category]}</Badge>

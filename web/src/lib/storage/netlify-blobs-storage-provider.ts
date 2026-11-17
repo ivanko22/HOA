@@ -47,7 +47,10 @@ export class NetlifyBlobsStorageProvider implements StorageProvider {
     const safeName = input.originalFilename
       .replace(/[^a-zA-Z0-9._-]+/g, "-")
       .slice(0, 120);
-    const storageKey = `${input.communityId}/${randomUUID()}-${safeName}`;
+    const storageKey =
+      input.storageKey && input.storageKey.startsWith(`${input.communityId}/`)
+        ? input.storageKey
+        : `${input.communityId}/${randomUUID()}-${safeName}`;
     const bytes = new Uint8Array(input.body);
     await this.store.set(storageKey, new Blob([bytes]), {
       metadata: {

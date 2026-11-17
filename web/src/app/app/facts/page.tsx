@@ -3,7 +3,9 @@ import { requireTenantContext } from "@/lib/auth/config";
 import { verificationStatuses, type VerificationStatus } from "@/lib/domain/enums";
 import { can } from "@/lib/domain/permissions";
 import { listFactsForReview } from "@/lib/services/fact-review";
+import { DocumentThumbnail } from "@/components/documents/document-thumbnail";
 import { StatusBadge } from "@/components/verification/status-badge";
+import { VisualStatusBadge } from "@/components/verification/visual-status-badge";
 import {
   approveFactAction,
   correctFactAction,
@@ -87,7 +89,13 @@ export default async function FactReviewPage({
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
           Extracted figures stay out of Financial Health until they are approved.
-          A correction keeps the original amount and the evidence excerpt.
+          Hover or tap a thumbnail to inspect the source page. Visual evidence
+          checks stay separate from Approve.
+        </p>
+        <p className="mt-2 text-sm">
+          <Link href="/app/sources/verification" className="text-[var(--accent)] hover:underline">
+            Open document verification report
+          </Link>
         </p>
       </div>
 
@@ -137,12 +145,13 @@ export default async function FactReviewPage({
         <table className="w-full min-w-[1100px] text-left text-sm">
           <thead className="border-b border-[var(--border)] bg-[var(--surface-hover)] text-xs uppercase tracking-wide text-[var(--muted)]">
             <tr>
+              <th className="px-3 py-2">Preview</th>
               <th className="px-3 py-2">Metric</th>
               <th className="px-3 py-2">Amount</th>
               <th className="px-3 py-2">Period</th>
               <th className="px-3 py-2">Source</th>
               <th className="px-3 py-2">Evidence</th>
-              <th className="px-3 py-2">Confidence</th>
+              <th className="px-3 py-2">Visual check</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Review</th>
             </tr>
@@ -150,13 +159,24 @@ export default async function FactReviewPage({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-[var(--muted)]">
+                <td colSpan={9} className="px-3 py-6 text-center text-[var(--muted)]">
                   No facts match these filters.
                 </td>
               </tr>
             ) : null}
             {rows.map((fact) => (
               <tr key={fact.id} className="border-b border-[var(--border)] align-top last:border-0">
+                <td className="px-3 py-3">
+                  <DocumentThumbnail
+                    documentId={fact.documentId}
+                    title={fact.documentTitle ?? fact.label}
+                    page={fact.sourcePage}
+                    excerpt={fact.sourceExcerpt}
+                    matchText={fact.evidenceMatchText}
+                    amountLabel={moneyLabel(fact.numericValue)}
+                    mimeType={fact.mimeType}
+                  />
+                </td>
                 <td className="px-3 py-3">
                   <p className="font-medium">{fact.label}</p>
                   <p className="text-xs text-[var(--muted)]">{fact.factType}</p>
@@ -189,8 +209,21 @@ export default async function FactReviewPage({
                   <p className="text-xs text-[var(--muted)]">
                     {fact.sourceExcerpt ?? "No excerpt stored"}
                   </p>
+                  <Link
+                    href={`/app/sources/verification/${fact.id}`}
+                    className="mt-1 inline-block text-xs text-[var(--accent)] hover:underline"
+                  >
+                    Side-by-side
+                  </Link>
                 </td>
-                <td className="px-3 py-3 tabular-nums">{fact.confidence ?? "—"}</td>
+                <td className="px-3 py-3">
+                  <VisualStatusBadge status={fact.visualVerificationStatus} />
+                  {fact.visualVerificationNotes ? (
+                    <p className="mt-1 max-w-[12rem] text-xs text-[var(--muted)]">
+                      {fact.visualVerificationNotes}
+                    </p>
+                  ) : null}
+                </td>
                 <td className="px-3 py-3">
                   <StatusBadge status={fact.verificationStatus} />
                 </td>
