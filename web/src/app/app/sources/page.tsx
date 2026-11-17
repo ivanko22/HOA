@@ -38,7 +38,13 @@ export default async function SourcesPage() {
         ) : null}
       </div>
 
-      <p className="text-sm">
+      <p className="flex flex-wrap gap-4 text-sm">
+        <Link
+          href="/app/sources/verification"
+          className="text-[var(--accent)] hover:underline"
+        >
+          Document verification report
+        </Link>
         <Link
           href="/app/sources/reconciliation"
           className="text-[var(--accent)] hover:underline"

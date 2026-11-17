@@ -12,6 +12,8 @@ export type PutObjectInput = {
   originalFilename: string;
   mimeType: string;
   body: Buffer;
+  /** Optional stable key (e.g. preview cache). Must stay under the community. */
+  storageKey?: string;
 };
 
 export type GetObjectResult = {

@@ -57,6 +57,13 @@
       "when": 1793500000000,
       "tag": "0007_fact_review",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793600000000,
+      "tag": "0008_document_evidence",
+      "breakpoints": true
     }
   ]
 }

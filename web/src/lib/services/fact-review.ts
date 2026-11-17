@@ -1,7 +1,10 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { documents, facts } from "@/lib/db/schema";
-import type { VerificationStatus } from "@/lib/domain/enums";
+import type {
+  VerificationStatus,
+  VisualVerificationStatus,
+} from "@/lib/domain/enums";
 import {
   conflictingFactIds,
   factMatchesReviewFilter,
@@ -24,8 +27,13 @@ export type ReviewFactRow = {
   sourceExcerpt: string | null;
   confidence: string | null;
   verificationStatus: VerificationStatus;
+  visualVerificationStatus: VisualVerificationStatus;
+  visualFoundValue: string | null;
+  visualVerificationNotes: string | null;
+  evidenceMatchText: string | null;
   documentId: string;
   documentTitle: string | null;
+  mimeType: string | null;
   conflicting: boolean;
 };
 
@@ -50,8 +58,13 @@ export async function listFactsForReview(
       sourceExcerpt: facts.sourceExcerpt,
       confidence: facts.confidence,
       verificationStatus: facts.verificationStatus,
+      visualVerificationStatus: facts.visualVerificationStatus,
+      visualFoundValue: facts.visualFoundValue,
+      visualVerificationNotes: facts.visualVerificationNotes,
+      evidenceMatchText: facts.evidenceMatchText,
       documentId: facts.documentId,
       documentTitle: documents.title,
+      mimeType: documents.mimeType,
     })
     .from(facts)
     .leftJoin(

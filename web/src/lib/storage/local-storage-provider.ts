@@ -21,10 +21,10 @@ export class LocalStorageProvider implements StorageProvider {
     const safeName = input.originalFilename
       .replace(/[^a-zA-Z0-9._-]+/g, "-")
       .slice(0, 120);
-    const storageKey = path.posix.join(
-      input.communityId,
-      `${randomUUID()}-${safeName}`,
-    );
+    const storageKey =
+      input.storageKey && input.storageKey.startsWith(`${input.communityId}/`)
+        ? input.storageKey
+        : path.posix.join(input.communityId, `${randomUUID()}-${safeName}`);
     const absolutePath = path.join(/*turbopackIgnore: true*/ this.root, storageKey);
     await mkdir(path.dirname(absolutePath), { recursive: true });
     await writeFile(/*turbopackIgnore: true*/ absolutePath, input.body);
