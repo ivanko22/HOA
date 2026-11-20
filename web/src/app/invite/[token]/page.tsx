@@ -30,10 +30,8 @@ export default async function InvitePage({
         ) : (
           <>
             <p className="mt-2 text-sm text-[var(--muted)]">
-              Confirm <strong>{resolved.invite.email}</strong> and set a
-              password to join as{" "}
-              {resolved.invite.role.replaceAll("_", " ")}. Opening this link
-              proves you control the email inbox.
+              Join with <strong>{resolved.invite.email}</strong> as{" "}
+              {resolved.invite.role.replaceAll("_", " ")}. If you already have an account, enter your current password. Otherwise, choose a new password.
             </p>
             <AcceptInviteForm
               token={token}

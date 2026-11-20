@@ -302,6 +302,9 @@ async function refreshDocumentProcessingStatus(
 export async function addManualFact(ctx: TenantContext, raw: CreateFactInput) {
   assertCan(ctx.capabilities, "documents.manage");
   const input = createFactInputSchema.parse(raw);
+  if (input.verificationStatus === "verified") {
+    assertCan(ctx.capabilities, "finance.verify");
+  }
 
   const [doc] = await db
     .select()

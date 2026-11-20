@@ -155,6 +155,49 @@ describe("import pipeline integration", () => {
     expect(provenance.importRow?.raw).toBeTruthy();
   });
 
+  it("does not bulk approve duplicates or approve a row twice", async () => {
+    const detail = await getImportBatchDetail(ctx, batchId);
+    expect(detail.rows.some((r) => r.status === "duplicate")).toBe(true);
+    expect(await approveImportRows(ctx, { batchId })).toEqual({ approved: 0 });
+    const posted = await db.select().from(financialTransactions)
+      .where(eq(financialTransactions.importBatchId, batchId));
+    expect(new Set(posted.map((t) => t.importRowId)).size).toBe(posted.length);
+  });
+
+  it("preserves approved rows when remapping", async () => {
+    const before = await getImportBatchDetail(ctx, batchId);
+    const approved = before.rows.filter((r) => r.status === "approved");
+    const after = await saveImportMapping(ctx, {
+      batchId, mapping: before.batch.mapping ?? {},
+    });
+    for (const row of approved) {
+      expect(after.rows.find((r) => r.id === row.id)).toEqual(row);
+    }
+    expect(await approveImportRows(ctx, { batchId })).toEqual({ approved: 0 });
+  });
+
+  it("serializes concurrent approvals of the same row", async () => {
+    const marker = `concurrent-${Date.now()}`;
+    const uploaded = await uploadImportCsv(ctx, {
+      sourceType: "generic_csv",
+      file: { name: "concurrent.csv", type: "text/csv",
+        bytes: Buffer.from(`Date,Description,Amount\n2026-09-10,${marker},17.00\n`) },
+    });
+    const id = uploaded.batch.id;
+    createdBatchIds.push(id);
+    await saveImportMapping(ctx, {
+      batchId: id, mapping: { date: "Date", description: "Description", amount: "Amount" },
+    });
+    const results = await Promise.all([
+      approveImportRows(ctx, { batchId: id }),
+      approveImportRows(ctx, { batchId: id }),
+    ]);
+    expect(results.reduce((sum, r) => sum + r.approved, 0)).toBe(1);
+    const posted = await db.select().from(financialTransactions)
+      .where(eq(financialTransactions.importBatchId, id));
+    expect(posted).toHaveLength(1);
+  });
+
   it("enforces tenant isolation on batch access", async () => {
     const others = await db
       .select()

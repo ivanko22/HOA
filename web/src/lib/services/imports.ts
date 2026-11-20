@@ -27,6 +27,8 @@ import {
 import { getStorageProvider } from "@/lib/storage";
 import { recordAudit } from "./audit";
 
+type ImportExecutor = Pick<typeof db, "select" | "update">;
+
 export type ImportRowFilter =
   | "needs_review"
   | "invalid"
@@ -42,8 +44,8 @@ function tenantBatchFilter(ctx: TenantContext) {
   );
 }
 
-async function getBatchOrThrow(ctx: TenantContext, batchId: string) {
-  const [batch] = await db
+async function getBatchOrThrow(ctx: TenantContext, batchId: string, executor: Pick<typeof db, "select"> = db) {
+  const [batch] = await executor
     .select()
     .from(importBatches)
     .where(and(eq(importBatches.id, batchId), tenantBatchFilter(ctx)))
@@ -251,80 +253,85 @@ export async function saveImportMapping(
     saveAsProfileName?: string | null;
   },
 ) {
-  assertCan(ctx.capabilities, "import.csv");
-  const batch = await getBatchOrThrow(ctx, input.batchId);
+  const batchId = await db.transaction(async (db) => {
+    assertCan(ctx.capabilities, "import.csv");
+    const batch = await getBatchOrThrow(ctx, input.batchId, db);
+    await db.execute(sql`select id from import_batches where id = ${batch.id} for update`);
 
-  const parsed = mappingSchema.safeParse(input.mapping);
-  if (!parsed.success) {
-    throw new Error(parsed.error.issues.map((i) => i.message).join("; "));
-  }
-
-  let profileId = batch.profileId;
-  if (input.saveAsProfileName?.trim()) {
-    const name = input.saveAsProfileName.trim();
-    const existing = await db
-      .select()
-      .from(importProfiles)
-      .where(
-        and(
-          eq(importProfiles.communityId, ctx.communityId),
-          eq(importProfiles.name, name),
-        ),
-      )
-      .limit(1);
-
-    if (existing[0]) {
-      const [updated] = await db
-        .update(importProfiles)
-        .set({
-          mapping: parsed.data,
-          sourceType: batch.sourceType,
-          updatedAt: new Date(),
-        })
-        .where(eq(importProfiles.id, existing[0].id))
-        .returning();
-      profileId = updated.id;
-    } else {
-      const [created] = await db
-        .insert(importProfiles)
-        .values({
-          organizationId: ctx.organizationId,
-          communityId: ctx.communityId,
-          name,
-          sourceType: batch.sourceType,
-          mapping: parsed.data,
-          createdBy: ctx.userId,
-        })
-        .returning();
-      profileId = created.id;
+    const parsed = mappingSchema.safeParse(input.mapping);
+    if (!parsed.success) {
+      throw new Error(parsed.error.issues.map((i) => i.message).join("; "));
     }
-  }
 
-  await db
-    .update(importBatches)
-    .set({
-      mapping: parsed.data,
-      profileId,
-      status: "parsing",
-      updatedAt: new Date(),
-    })
-    .where(eq(importBatches.id, batch.id));
+    let profileId = batch.profileId;
+    if (input.saveAsProfileName?.trim()) {
+      const name = input.saveAsProfileName.trim();
+      const existing = await db
+        .select()
+        .from(importProfiles)
+        .where(
+          and(
+            eq(importProfiles.communityId, ctx.communityId),
+            eq(importProfiles.name, name),
+          ),
+        )
+        .limit(1);
 
-  await applyMappingAndValidate(ctx, batch.id);
+      if (existing[0]) {
+        const [updated] = await db
+          .update(importProfiles)
+          .set({
+            mapping: parsed.data,
+            sourceType: batch.sourceType,
+            updatedAt: new Date(),
+          })
+          .where(eq(importProfiles.id, existing[0].id))
+          .returning();
+        profileId = updated.id;
+      } else {
+        const [created] = await db
+          .insert(importProfiles)
+          .values({
+            organizationId: ctx.organizationId,
+            communityId: ctx.communityId,
+            name,
+            sourceType: batch.sourceType,
+            mapping: parsed.data,
+            createdBy: ctx.userId,
+          })
+          .returning();
+        profileId = created.id;
+      }
+    }
 
-  await recordAudit({
-    ctx,
-    action: "import.batch.map",
-    entityType: "import_batch",
-    entityId: batch.id,
-    after: { mapping: parsed.data, profileId },
+    await db
+      .update(importBatches)
+      .set({
+        mapping: parsed.data,
+        profileId,
+        status: "parsing",
+        updatedAt: new Date(),
+      })
+      .where(eq(importBatches.id, batch.id));
+
+    await applyMappingAndValidate(ctx, batch.id, db);
+    await refreshBatchApprovalStatus(ctx, batch.id, db);
+
+    await recordAudit({
+      ctx,
+      action: "import.batch.map",
+      entityType: "import_batch",
+      entityId: batch.id,
+      after: { mapping: parsed.data, profileId },
+    }, db);
+
+    return batch.id;
   });
-
-  return getImportBatchDetail(ctx, batch.id);
+  return getImportBatchDetail(ctx, batchId);
 }
 
-async function applyMappingAndValidate(ctx: TenantContext, batchId: string) {
-  const batch = await getBatchOrThrow(ctx, batchId);
+async function applyMappingAndValidate(ctx: TenantContext, batchId: string, db: ImportExecutor) {
+  const batch = await getBatchOrThrow(ctx, batchId, db);
   const mapping = (batch.mapping ?? {}) as Record<string, string>;
 
   const rows = await db
@@ -375,6 +382,7 @@ async function applyMappingAndValidate(ctx: TenantContext, batchId: string) {
   let duplicates = 0;
 
   for (const row of rows) {
+    if (row.status === "approved") continue;
     const normalized = applyMapping(
       row.raw as Record<string, string>,
       mapping,
@@ -510,96 +518,103 @@ export async function approveImportRows(
   input: { batchId: string; rowIds?: string[] },
 ) {
   assertCan(ctx.capabilities, "import.approve");
-  const batch = await getBatchOrThrow(ctx, input.batchId);
+  if (input.rowIds && input.rowIds.length === 0) return { approved: 0 };
+  return db.transaction(async (db) => {
+    const batch = await getBatchOrThrow(ctx, input.batchId, db);
+    await db.execute(sql`select id from import_batches where id = ${batch.id} for update`);
 
-  const conditions = [
-    eq(importRows.batchId, batch.id),
-    eq(importRows.organizationId, ctx.organizationId),
-    eq(importRows.communityId, ctx.communityId),
-    inArray(importRows.status, ["ready", "duplicate", "needs_review"]),
-  ];
-  if (input.rowIds?.length) {
-    conditions.push(inArray(importRows.id, input.rowIds));
-  }
+    const conditions = [
+      eq(importRows.batchId, batch.id),
+      eq(importRows.organizationId, ctx.organizationId),
+      eq(importRows.communityId, ctx.communityId),
+      input.rowIds?.length
+        ? inArray(importRows.status, ["ready", "duplicate", "needs_review"])
+        : eq(importRows.status, "ready"),
+    ];
+    if (input.rowIds?.length) {
+      conditions.push(inArray(importRows.id, input.rowIds));
+    }
 
-  const candidates = await db
-    .select()
-    .from(importRows)
-    .where(and(...conditions));
+    const candidates = await db
+      .select()
+      .from(importRows)
+      .where(and(...conditions));
 
-  // Only approve rows that are valid (no hard validation errors other than duplicate flag)
-  const approvable = candidates.filter((r) => {
-    const errs = (r.validationErrors ?? []).filter(
-      (e) => e !== "Probable duplicate (fingerprint match)",
-    );
-    return errs.length === 0 && r.normalized != null;
-  });
+    // Only approve rows that are valid (no hard validation errors other than duplicate flag)
+    const approvable = candidates.filter((r) => {
+      const errs = (r.validationErrors ?? []).filter(
+        (e) => e !== "Probable duplicate (fingerprint match)",
+      );
+      return errs.length === 0 && r.normalized != null;
+    });
 
-  let created = 0;
-  for (const row of approvable) {
-    const n = row.normalized as NormalizedImportValues;
-    if (!n.date || !n.description || n.amount == null) continue;
+    let created = 0;
+    for (const row of approvable) {
+      const n = row.normalized as NormalizedImportValues;
+      if (!n.date || !n.description || n.amount == null) continue;
 
-    const [tx] = await db
-      .insert(financialTransactions)
-      .values({
-        organizationId: ctx.organizationId,
-        communityId: ctx.communityId,
-        importRowId: row.id,
-        importBatchId: batch.id,
-        sourceDocumentId: batch.documentId,
-        transactionDate: n.date,
-        description: n.description,
-        amount: n.amount,
-        direction: n.direction,
-        category: n.category,
-        classification: row.classification,
-        vendorName: n.vendor,
-        ownerDisplay: n.owner,
-        externalId: n.externalId,
-        reference: n.reference,
-        status: "posted",
-        verificationStatus: "reported",
-        duplicateFingerprint: row.duplicateFingerprint,
-      })
-      .returning();
+      const [tx] = await db
+        .insert(financialTransactions)
+        .values({
+          organizationId: ctx.organizationId,
+          communityId: ctx.communityId,
+          importRowId: row.id,
+          importBatchId: batch.id,
+          sourceDocumentId: batch.documentId,
+          transactionDate: n.date,
+          description: n.description,
+          amount: n.amount,
+          direction: n.direction,
+          category: n.category,
+          classification: row.classification,
+          vendorName: n.vendor,
+          ownerDisplay: n.owner,
+          externalId: n.externalId,
+          reference: n.reference,
+          status: "posted",
+          verificationStatus: "reported",
+          duplicateFingerprint: row.duplicateFingerprint,
+        })
+        .returning();
+
+      await db
+        .update(importRows)
+        .set({ status: "approved", updatedAt: new Date() })
+        .where(eq(importRows.id, row.id));
+
+      created += 1;
+      void tx;
+    }
 
     await db
-      .update(importRows)
-      .set({ status: "approved", updatedAt: new Date() })
-      .where(eq(importRows.id, row.id));
+      .update(importBatches)
+      .set({
+        reviewedBy: ctx.userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(importBatches.id, batch.id));
 
-    created += 1;
-    void tx;
-  }
+    await refreshBatchApprovalStatus(ctx, batch.id, db);
 
-  await db
-    .update(importBatches)
-    .set({
-      reviewedBy: ctx.userId,
-      reviewedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(importBatches.id, batch.id));
+    await recordAudit({
+      ctx,
+      action: "import.rows.approve",
+      entityType: "import_batch",
+      entityId: batch.id,
+      after: { approved: created, requested: input.rowIds?.length ?? "all_ready" },
+    }, db);
 
-  await refreshBatchApprovalStatus(ctx, batch.id);
-
-  await recordAudit({
-    ctx,
-    action: "import.rows.approve",
-    entityType: "import_batch",
-    entityId: batch.id,
-    after: { approved: created, requested: input.rowIds?.length ?? "all_ready" },
+    return { approved: created };
   });
-
-  return { approved: created };
 }
 
 async function refreshBatchApprovalStatus(
   ctx: TenantContext,
   batchId: string,
+  executor: ImportExecutor = db,
 ) {
-  const rows = await db
+  const rows = await executor
     .select({ status: importRows.status })
     .from(importRows)
     .where(
@@ -632,7 +647,7 @@ async function refreshBatchApprovalStatus(
     status = "needs_review";
   }
 
-  await db
+  await executor
     .update(importBatches)
     .set({ status, updatedAt: new Date() })
     .where(eq(importBatches.id, batchId));

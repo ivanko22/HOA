@@ -43,7 +43,7 @@ export function AcceptInviteForm({
         />
       </label>
       <label className="block text-sm">
-        <span className="text-[var(--muted)]">Password (min 8 characters)</span>
+        <span className="text-[var(--muted)]">Password (existing account password, or a new password)</span>
         <input
           name="password"
           type="password"
@@ -62,7 +62,7 @@ export function AcceptInviteForm({
         disabled={pending}
         className="w-full bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-60"
       >
-        {pending ? "Confirming…" : "Confirm email & create account"}
+        {pending ? "Confirming…" : "Accept invite"}
       </button>
     </form>
   );

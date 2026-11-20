@@ -225,6 +225,7 @@ export const financialTransactions = pgTable(
       .notNull(),
   },
   (t) => [
+    uniqueIndex("financial_transactions_import_row_unique").on(t.importRowId),
     index("financial_transactions_community_date_idx").on(
       t.communityId,
       t.transactionDate,

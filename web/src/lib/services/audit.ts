@@ -11,8 +11,8 @@ export async function recordAudit(params: {
   after?: unknown;
   ip?: string | null;
   sessionId?: string | null;
-}): Promise<void> {
-  await db.insert(auditEvents).values({
+}, executor: Pick<typeof db, "insert"> = db): Promise<void> {
+  await executor.insert(auditEvents).values({
     organizationId: params.ctx?.organizationId ?? null,
     communityId: params.ctx?.communityId ?? null,
     actorUserId: params.ctx?.userId ?? null,

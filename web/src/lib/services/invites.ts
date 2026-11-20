@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
-import { hash } from "bcryptjs";
+import { compare, hash } from "bcryptjs";
 import { z } from "zod";
 import { db } from "@/lib/db/client";
 import { memberships, userInvites, users } from "@/lib/db/schema";
@@ -203,15 +203,9 @@ export async function acceptInvite(raw: z.infer<typeof acceptInviteInputSchema>)
     .limit(1);
 
   if (user) {
-    await db
-      .update(users)
-      .set({
-        name: input.name,
-        passwordHash,
-        emailVerifiedAt: now,
-        updatedAt: now,
-      })
-      .where(eq(users.id, user.id));
+    if (!user.passwordHash || !(await compare(input.password, user.passwordHash))) {
+      throw new Error("Enter your existing account password to accept this invite.");
+    }
   } else {
     [user] = await db
       .insert(users)

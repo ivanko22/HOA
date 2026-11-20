@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db/client";
 import { users, memberships, communities } from "@/lib/db/schema";
@@ -73,7 +73,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
 export async function resolveTenantContext(
   userId: string,
-  communitySlug = "the-willows",
+  communitySlug?: string,
 ): Promise<TenantContext | null> {
   const [user] = await db
     .select()
@@ -82,17 +82,22 @@ export async function resolveTenantContext(
     .limit(1);
   if (!user) return null;
 
-  const [community] = await db
-    .select()
-    .from(communities)
-    .where(eq(communities.slug, communitySlug))
-    .limit(1);
-  if (!community) return null;
-
   const rows = await db
     .select()
     .from(memberships)
-    .where(eq(memberships.userId, userId));
+    .where(eq(memberships.userId, userId))
+    .orderBy(asc(memberships.createdAt), asc(memberships.id));
+
+  const defaultCommunityId = rows[0]?.communityId;
+  if (!communitySlug && !defaultCommunityId) return null;
+  const [community] = await db
+    .select()
+    .from(communities)
+    .where(communitySlug
+      ? eq(communities.slug, communitySlug)
+      : eq(communities.id, defaultCommunityId!))
+    .limit(1);
+  if (!community) return null;
 
   const communityMemberships = rows.filter(
     (m) => m.communityId === community.id,
@@ -130,7 +135,7 @@ export async function resolveTenantContext(
 }
 
 export async function requireTenantContext(
-  communitySlug = "the-willows",
+  communitySlug?: string,
 ): Promise<TenantContext> {
   const session = await auth();
   if (!session?.user?.id) {
